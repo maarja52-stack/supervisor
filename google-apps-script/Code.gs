@@ -1,6 +1,8 @@
 const EMPLOYEE_HEADERS = ['id', 'name', 'startDate', 'contractType', 'status', 'isArchived', 'albumFolderId', 'updatedAt'];
 
 function doGet() {
+  const sheets = getEmployeeSheets_();
+  migrateArchivedEmployees_(sheets);
   return ContentService.createTextOutput(JSON.stringify({ ok: true, message: 'Housekeeping API is live.' })).setMimeType(ContentService.MimeType.JSON);
 }
 
@@ -126,6 +128,7 @@ function ensureEmployeeFolder(employeeId, displayName) {
 
 function listEmployees() {
   const sheet = ensureSheet('Employees', EMPLOYEE_HEADERS);
+  migrateArchivedEmployees_(getEmployeeSheets_());
   const rows = sheet.getDataRange().getValues();
   const headers = rows[0];
   const data = rows.slice(1).map((row) => {
@@ -138,109 +141,155 @@ function listEmployees() {
   return { ok: true, employees: data };
 }
 
-function saveEmployee(employee) {
-  const sheet = ensureSheet('Employees', EMPLOYEE_HEADERS);
+function getEmployeeSheets_() {
+  return {
+    active: ensureSheet('Employees', EMPLOYEE_HEADERS),
+    archived: ensureSheet('Employee_Archive', EMPLOYEE_HEADERS),
+  };
+}
+
+function findEmployeeRow_(sheet, employeeId) {
   const rows = sheet.getDataRange().getValues();
-  const headerRow = rows[0] || [];
+  const headers = rows[0] || [];
+  const idColumn = headers.indexOf('id');
+  if (idColumn < 0) return null;
+
+  for (let rowIndex = 1; rowIndex < rows.length; rowIndex += 1) {
+    if ((rows[rowIndex][idColumn] || '').toString() === employeeId) {
+      const employee = {};
+      headers.forEach((header, columnIndex) => {
+        employee[header] = rows[rowIndex][columnIndex] ?? '';
+      });
+      return { rowIndex: rowIndex + 1, headers, employee };
+    }
+  }
+  return null;
+}
+
+function removeEmployeeRows_(sheet, employeeId) {
+  const rows = sheet.getDataRange().getValues();
+  const idColumn = (rows[0] || []).indexOf('id');
+  if (idColumn < 0) return;
+
+  for (let rowIndex = rows.length - 1; rowIndex >= 1; rowIndex -= 1) {
+    if ((rows[rowIndex][idColumn] || '').toString() === employeeId) {
+      sheet.deleteRow(rowIndex + 1);
+    }
+  }
+}
+
+function writeEmployeeRecord_(employee, archived) {
+  const sheets = getEmployeeSheets_();
+  const target = archived ? sheets.archived : sheets.active;
+  const source = archived ? sheets.active : sheets.archived;
+  const targetRows = target.getDataRange().getValues();
+  const headers = targetRows[0] || [];
+  const idColumn = headers.indexOf('id');
+  const values = headers.map((header) => employee[header] ?? '');
+  let targetRow = 0;
+
+  for (let rowIndex = 1; rowIndex < targetRows.length; rowIndex += 1) {
+    if ((targetRows[rowIndex][idColumn] || '').toString() === employee.id) {
+      targetRow = rowIndex + 1;
+      break;
+    }
+  }
+
+  if (targetRow) {
+    target.getRange(targetRow, 1, 1, values.length).setValues([values]);
+  } else {
+    target.appendRow(values);
+  }
+  removeEmployeeRows_(source, employee.id);
+  return { sheet: target, row: targetRow || target.getLastRow() };
+}
+
+function migrateArchivedEmployees_(sheets) {
+  const rows = sheets.active.getDataRange().getValues();
+  const headers = rows[0] || [];
+  const archivedColumn = headers.indexOf('isArchived');
+  if (archivedColumn < 0) return;
+
+  for (let rowIndex = rows.length - 1; rowIndex >= 1; rowIndex -= 1) {
+    const archived = rows[rowIndex][archivedColumn] === true
+      || String(rows[rowIndex][archivedColumn]).toUpperCase() === 'TRUE';
+    if (!archived) continue;
+
+    const employee = {};
+    headers.forEach((header, columnIndex) => {
+      employee[header] = rows[rowIndex][columnIndex] ?? '';
+    });
+    writeEmployeeRecord_(employee, true);
+  }
+}
+
+function saveEmployee(employee) {
+  const sheets = getEmployeeSheets_();
   const id = employee.id || Utilities.getUuid();
+  const archived = employee.isArchived === true || employee.isArchived === 'TRUE';
+  const existing = findEmployeeRow_(sheets.active, id) || findEmployeeRow_(sheets.archived, id);
   const payload = {
     id,
     name: employee.name || 'Unnamed employee',
     startDate: employee.startDate || new Date().toISOString().slice(0, 10),
     contractType: employee.contractType || '',
-    status: employee.status || 'active',
-    isArchived: employee.isArchived ? 'TRUE' : 'FALSE',
-    albumFolderId: employee.albumFolderId || '',
+    status: employee.status || (archived ? 'inactive' : 'active'),
+    isArchived: archived ? 'TRUE' : 'FALSE',
+    albumFolderId: employee.albumFolderId || existing?.employee.albumFolderId || '',
     updatedAt: new Date().toISOString(),
   };
 
-  let employeeRow = 0;
-  for (let rowIndex = 1; rowIndex < rows.length; rowIndex += 1) {
-    const row = rows[rowIndex];
-    if ((row[0] || '').toString() === id) {
-      const updateRow = headerRow.map((header) => payload[header] ?? '');
-      employeeRow = rowIndex + 1;
-      sheet.getRange(employeeRow, 1, 1, updateRow.length).setValues([updateRow]);
-      break;
-    }
-  }
-
-  if (!employeeRow) {
-    sheet.appendRow(headerRow.map((header) => payload[header] ?? ''));
-    employeeRow = sheet.getLastRow();
-  }
-
   if (!payload.albumFolderId) {
     const folder = ensureEmployeeFolder(id, payload.name);
-    const folderId = folder.getId();
-    sheet.getRange(employeeRow, headerRow.indexOf('albumFolderId') + 1).setValue(folderId);
-    payload.albumFolderId = folderId;
+    payload.albumFolderId = folder.getId();
   }
 
+  writeEmployeeRecord_(payload, archived);
   return { ok: true, employee: payload };
 }
 
 function archiveEmployee(employeeId, isArchived) {
-  const sheet = ensureSheet('Employees', EMPLOYEE_HEADERS);
-  const rows = sheet.getDataRange().getValues();
-  const headers = rows[0] || [];
+  const sheets = getEmployeeSheets_();
   const archived = isArchived !== false;
-  const idColumn = headers.indexOf('id');
-  const archivedColumn = headers.indexOf('isArchived');
-  const statusColumn = headers.indexOf('status');
-  const updatedAtColumn = headers.indexOf('updatedAt');
-  const folderIdColumn = headers.indexOf('albumFolderId');
+  const found = findEmployeeRow_(sheets.active, employeeId)
+    || findEmployeeRow_(sheets.archived, employeeId);
+  if (!found) return { ok: false, message: 'Employee not found' };
 
-  for (let rowIndex = 1; rowIndex < rows.length; rowIndex += 1) {
-    if ((rows[rowIndex][idColumn] || '').toString() === employeeId) {
-      sheet.getRange(rowIndex + 1, archivedColumn + 1).setValue(archived ? 'TRUE' : 'FALSE');
-      sheet.getRange(rowIndex + 1, statusColumn + 1).setValue(archived ? 'inactive' : 'active');
-      sheet.getRange(rowIndex + 1, updatedAtColumn + 1).setValue(new Date().toISOString());
+  found.employee.isArchived = archived ? 'TRUE' : 'FALSE';
+  found.employee.status = archived ? 'inactive' : 'active';
+  found.employee.updatedAt = new Date().toISOString();
+  writeEmployeeRecord_(found.employee, archived);
 
-      const folderId = rows[rowIndex][folderIdColumn];
-      if (folderId) {
-        const folder = DriveApp.getFolderById(folderId);
-        const destination = archived
-          ? getOrCreateFolder_(DriveApp.getRootFolder(), 'Archived Employee Photos')
-          : ensureFolders().mainFolder;
-        folder.moveTo(destination);
-      }
-
-      return { ok: true, archived };
-    }
+  const folderId = found.employee.albumFolderId;
+  if (folderId) {
+    const folder = DriveApp.getFolderById(folderId);
+    const destination = archived
+      ? getOrCreateFolder_(DriveApp.getRootFolder(), 'Archived Employee Photos')
+      : ensureFolders().mainFolder;
+    folder.moveTo(destination);
   }
 
-  function getOrCreateFolder_(parent, name) {
-    const folders = parent.getFoldersByName(name);
-    return folders.hasNext() ? folders.next() : parent.createFolder(name);
-  }
+  return { ok: true, archived };
+}
 
-  return { ok: false, message: 'Employee not found' };
+function getOrCreateFolder_(parent, name) {
+  const folders = parent.getFoldersByName(name);
+  return folders.hasNext() ? folders.next() : parent.createFolder(name);
 }
 
 function deleteEmployee(employeeId) {
-  const sheet = ensureSheet('Employees', EMPLOYEE_HEADERS);
-  const rows = sheet.getDataRange().getValues();
-  const headers = rows[0] || [];
-  const idColumn = headers.indexOf('id');
-  const folderIdColumn = headers.indexOf('albumFolderId');
+  const sheets = getEmployeeSheets_();
+  const found = findEmployeeRow_(sheets.active, employeeId)
+    || findEmployeeRow_(sheets.archived, employeeId);
+  if (!found) return { ok: false, message: 'Employee not found' };
 
-  for (let rowIndex = 1; rowIndex < rows.length; rowIndex += 1) {
-    if ((rows[rowIndex][idColumn] || '').toString() === employeeId) {
-      sheet.deleteRow(rowIndex + 1);
-      const folderId = rows[rowIndex][folderIdColumn];
-      if (folderId) {
-        try {
-          DriveApp.getFolderById(folderId).setTrashed(true);
-        } catch (error) {
-          // Ignore if folder is not found.
-        }
-      }
-      return { ok: true, deleted: true };
-    }
+  const folderId = found.employee.albumFolderId;
+  removeEmployeeRows_(sheets.active, employeeId);
+  removeEmployeeRows_(sheets.archived, employeeId);
+  if (folderId) {
+    DriveApp.getFolderById(folderId).setTrashed(true);
   }
-
-  return { ok: false, message: 'Employee not found' };
+  return { ok: true, deleted: true };
 }
 
 function listRecords() {
