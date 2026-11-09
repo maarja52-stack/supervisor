@@ -1128,6 +1128,10 @@ const attachEventHandlers = () => {
       const confirmed = window.confirm(`Delete ${employee.name} and all local references?`);
       if (!confirmed) return;
 
+      state.employees = state.employees.filter((current) => current.id !== employeeId);
+      saveState();
+      renderNavigation();
+
       if (googleScriptConfig.enabled) {
         try {
           const result = await deleteEmployeeInGoogle(employeeId);
@@ -1139,10 +1143,6 @@ const attachEventHandlers = () => {
           reportGoogleSyncError('Employee delete sync failed', error);
         }
       }
-
-      state.employees = state.employees.filter((current) => current.id !== employeeId);
-      saveState();
-      renderNavigation();
     }
 
     if (target.id === 'export-report') {
