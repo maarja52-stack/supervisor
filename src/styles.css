@@ -155,27 +155,11 @@ a {
   box-shadow: inset 0 -1px 0 rgba(255,255,255,0.03);
 }
 
-.google-auth-area {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 10px;
+.google-sync-status {
   min-width: 0;
   color: var(--muted);
-  font-size: 0.82rem;
-}
-
-.google-account {
-  max-width: 240px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.google-disconnect {
-  min-height: 34px;
-  padding: 6px 10px;
   font-size: 0.78rem;
+  overflow-wrap: anywhere;
 }
 
 .topbar .left {

@@ -9,22 +9,14 @@ function authorizeGoogleServices() {
   }
 
   const driveName = DriveApp.getRootFolder().getName();
-  UrlFetchApp.fetch('https://oauth2.googleapis.com/tokeninfo?id_token=invalid', {
-    muteHttpExceptions: true,
-  });
   return { spreadsheet: spreadsheet.getName(), drive: driveName };
 }
 
 function doPost(e) {
   try {
     const request = e && e.postData && e.postData.contents ? JSON.parse(e.postData.contents) : {};
-    const user = verifyIdentityToken(request.identityToken);
     const action = request.action || 'listEmployees';
     const data = request.payload || {};
-
-    if (action === 'verifyAccess') {
-      return jsonResponse({ ok: true, email: user.email });
-    }
 
     switch (action) {
       case 'listEmployees':
@@ -34,7 +26,7 @@ function doPost(e) {
       case 'saveEmployee':
         return jsonResponse(saveEmployee(data));
       case 'archiveEmployee':
-        return jsonResponse(archiveEmployee(data.employeeId));
+        return jsonResponse(archiveEmployee(data.employeeId, data.isArchived));
       case 'deleteEmployee':
         return jsonResponse(deleteEmployee(data.employeeId));
       case 'saveInspection':
@@ -47,40 +39,6 @@ function doPost(e) {
   } catch (error) {
     return jsonResponse({ ok: false, message: error && error.message ? error.message : 'Request failed.' });
   }
-}
-
-function verifyIdentityToken(token) {
-  if (!token) {
-    throw new Error('Sign in with the authorized Google account.');
-  }
-
-  const properties = PropertiesService.getScriptProperties();
-  const clientId = properties.getProperty('GOOGLE_OAUTH_CLIENT_ID');
-  const ownerEmail = (properties.getProperty('GOOGLE_OWNER_EMAIL') || '').trim().toLowerCase();
-  if (!clientId || !ownerEmail) {
-    throw new Error('Google sign-in is not configured in Apps Script project settings.');
-  }
-
-  const response = UrlFetchApp.fetch(
-    'https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(token),
-    { muteHttpExceptions: true }
-  );
-  if (response.getResponseCode() !== 200) {
-    throw new Error('Google sign-in expired or could not be verified. Please sign in again.');
-  }
-
-  const claims = JSON.parse(response.getContentText());
-  const email = String(claims.email || '').trim().toLowerCase();
-  const verifiedEmail = claims.email_verified === true || claims.email_verified === 'true';
-  if (
-    claims.aud !== clientId ||
-    !verifiedEmail ||
-    email !== ownerEmail
-  ) {
-    throw new Error('This Google account is not authorized to use this app.');
-  }
-
-  return { email };
 }
 
 function jsonResponse(value) {
@@ -190,33 +148,33 @@ function saveEmployee(employee) {
   return { ok: true, employee: payload };
 }
 
-function archiveEmployee(employeeId) {
+function archiveEmployee(employeeId, isArchived) {
   const sheet = ensureSheet('Employees', ['id', 'name', 'startDate', 'status', 'isArchived', 'albumFolderId', 'updatedAt']);
   const rows = sheet.getDataRange().getValues();
+  const archived = isArchived !== false;
 
   for (let rowIndex = 1; rowIndex < rows.length; rowIndex += 1) {
     if ((rows[rowIndex][0] || '').toString() === employeeId) {
-      sheet.getRange(rowIndex + 1, 5).setValue('TRUE');
-      sheet.getRange(rowIndex + 1, 4).setValue('inactive');
+      sheet.getRange(rowIndex + 1, 5).setValue(archived ? 'TRUE' : 'FALSE');
+      sheet.getRange(rowIndex + 1, 4).setValue(archived ? 'inactive' : 'active');
       sheet.getRange(rowIndex + 1, 7).setValue(new Date().toISOString());
 
       const folderId = rows[rowIndex][5];
       if (folderId) {
-        try {
-          const folder = DriveApp.getFolderById(folderId);
-          const root = DriveApp.getRootFolder();
-          const archiveFolders = root.getFoldersByName('Archived Employee Photos');
-          const archiveRoot = archiveFolders.hasNext()
-            ? archiveFolders.next()
-            : root.createFolder('Archived Employee Photos');
-          folder.moveTo(archiveRoot);
-        } catch (error) {
-          // Ignore if folder is not found.
-        }
+        const folder = DriveApp.getFolderById(folderId);
+        const destination = archived
+          ? getOrCreateFolder_(DriveApp.getRootFolder(), 'Archived Employee Photos')
+          : ensureFolders().mainFolder;
+        folder.moveTo(destination);
       }
 
-      return { ok: true, archived: true };
+      return { ok: true, archived };
     }
+  }
+
+  function getOrCreateFolder_(parent, name) {
+    const folders = parent.getFoldersByName(name);
+    return folders.hasNext() ? folders.next() : parent.createFolder(name);
   }
 
   return { ok: false, message: 'Employee not found' };

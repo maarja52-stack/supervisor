@@ -1,10 +1,8 @@
-import { registerGoogleSync, saveEmployeeToGoogle, saveInspectionToGoogle, archiveEmployeeInGoogle, deleteEmployeeInGoogle, uploadEmployeePhoto, setGoogleIdentityToken, clearGoogleIdentityToken, loadGoogleIdentityApi, callGoogleScript } from './googleIntegration.js';
+import { registerGoogleSync, saveEmployeeToGoogle, saveInspectionToGoogle, archiveEmployeeInGoogle, deleteEmployeeInGoogle, uploadEmployeePhoto } from './googleIntegration.js';
 import { googleScriptConfig } from './config.js';
 
 const app = document.getElementById('app');
-let googleAccountEmail = '';
 let googleSyncError = '';
-let googleIdentityInitialized = false;
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const formatDate = (dateString) => {
@@ -152,32 +150,36 @@ const getEmployeeAlbum = (employee) => Array.isArray(employee?.photos) ? employe
 const reportGoogleSyncError = (context, error) => {
   googleSyncError = `${context}: ${error.message || 'Google request failed.'}`;
   console.error(googleSyncError, error);
-  const status = document.querySelector('.google-sync-error');
+  const status = document.querySelector('.google-sync-status');
   if (status) status.textContent = googleSyncError;
 };
 
 const clearGoogleSyncError = () => {
   googleSyncError = '';
-  const status = document.querySelector('.google-sync-error');
-  if (status) status.textContent = '';
+  const status = document.querySelector('.google-sync-status');
+  if (status) status.textContent = googleScriptConfig.enabled ? 'Google sync enabled' : 'Google sync not configured';
 };
 
 const syncEmployeeToGoogle = async (employee) => {
-  if (!googleScriptConfig.enabled || !employee) return;
+  if (!googleScriptConfig.enabled || !employee) return false;
 
   try {
     const payload = normalizeEmployee(employee);
     delete payload.photos;
-    Object.assign(payload, {
-      active: employee.active !== false && employee.status !== 'inactive',
-      status: employee.status || (employee.active === false ? 'inactive' : 'active'),
-    });
-
     const result = await saveEmployeeToGoogle(payload);
     if (!result?.ok) throw new Error(result?.message || 'Employee sync failed.');
+    const albumFolderId = result.employee?.albumFolderId;
+    if (albumFolderId && employee.albumFolderId !== albumFolderId) {
+      state.employees = state.employees.map((current) => current.id === employee.id
+        ? normalizeEmployee({ ...current, albumFolderId })
+        : current);
+      saveState();
+    }
     clearGoogleSyncError();
+    return true;
   } catch (error) {
     reportGoogleSyncError('Employee sync failed', error);
+    return false;
   }
 };
 
@@ -185,7 +187,29 @@ const syncInspectionToGoogle = async (inspection) => {
   if (!googleScriptConfig.enabled || !inspection) return;
 
   try {
-    const result = await saveInspectionToGoogle(inspection);
+    const cloudInspection = {
+      ...inspection,
+      results: inspection.results.map((result) => ({
+        ...result,
+        correction: result.correction ? {
+          ...result.correction,
+          photos: result.correction.photos.map(({ id, name, driveUrl }) => ({
+            id,
+            name,
+            url: driveUrl || '',
+          })),
+        } : null,
+      })),
+      corrections: inspection.corrections.map((correction) => ({
+        ...correction,
+        photos: correction.photos.map(({ id, name, driveUrl }) => ({
+          id,
+          name,
+          url: driveUrl || '',
+        })),
+      })),
+    };
+    const result = await saveInspectionToGoogle(cloudInspection);
     if (!result?.ok) throw new Error(result?.message || 'Inspection sync failed.');
     clearGoogleSyncError();
   } catch (error) {
@@ -253,7 +277,7 @@ const renderNavigation = () => {
               `).join('')}
             </nav>
           </details>
-          <div class="google-auth-area" id="google-auth-area"></div>
+          <div class="google-sync-status" role="status" aria-live="polite">${googleSyncError || (googleScriptConfig.enabled ? 'Google sync enabled' : 'Google sync not configured')}</div>
           <div class="tag">Housekeeping</div>
         </header>
         <main class="page">
@@ -262,78 +286,6 @@ const renderNavigation = () => {
       </div>
     </div>
   `;
-
-  renderGoogleSignIn();
-};
-
-const renderGoogleSignIn = async () => {
-  const container = document.getElementById('google-auth-area');
-  if (!container) return;
-
-  if (!googleScriptConfig.enabled || !googleScriptConfig.oauthClientId) {
-    container.textContent = 'Google Drive setup required';
-    container.title = 'Add the Apps Script URL and Google OAuth client ID to src/config.js.';
-    return;
-  }
-
-  if (googleAccountEmail) {
-    const account = document.createElement('span');
-    account.className = 'google-account';
-    account.textContent = `Drive connected: ${googleAccountEmail}`;
-    const status = document.createElement('span');
-    status.className = 'google-sync-error';
-    status.setAttribute('role', 'status');
-    status.setAttribute('aria-live', 'polite');
-    status.textContent = googleSyncError;
-    const disconnect = document.createElement('button');
-    disconnect.type = 'button';
-    disconnect.className = 'btn secondary google-disconnect';
-    disconnect.textContent = 'Disconnect';
-    disconnect.addEventListener('click', () => {
-      clearGoogleIdentityToken();
-      googleAccountEmail = '';
-      window.google?.accounts?.id?.disableAutoSelect();
-      renderGoogleSignIn();
-    });
-    container.replaceChildren(account, status, disconnect);
-    return;
-  }
-
-  container.textContent = 'Loading Google sign-in…';
-  try {
-    await loadGoogleIdentityApi();
-    if (!container.isConnected) return;
-    container.replaceChildren();
-    if (!googleIdentityInitialized) {
-      window.google.accounts.id.initialize({
-        client_id: googleScriptConfig.oauthClientId,
-        callback: async ({ credential }) => {
-          setGoogleIdentityToken(credential);
-          try {
-            const result = await callGoogleScript('verifyAccess');
-            if (!result.ok) throw new Error(result.message || 'Google sign-in failed.');
-            googleAccountEmail = result.email;
-            clearGoogleSyncError();
-            renderNavigation();
-          } catch (error) {
-            clearGoogleIdentityToken();
-            window.alert(error.message || 'Could not connect to Google Drive.');
-          }
-        },
-      });
-      googleIdentityInitialized = true;
-    }
-    window.google.accounts.id.renderButton(container, {
-      type: 'standard',
-      theme: 'outline',
-      size: 'medium',
-      text: 'signin_with',
-      shape: 'pill',
-    });
-  } catch (error) {
-    container.textContent = 'Google sign-in unavailable';
-    console.error(error);
-  }
 };
 
 const renderCurrentView = () => {
@@ -799,7 +751,7 @@ const attachEventHandlers = () => {
     }
   });
 
-  document.addEventListener('change', async (event) => {
+  document.addEventListener('change', (event) => {
     const target = event.target;
 
     if (target.id === 'history-room') {
@@ -834,7 +786,6 @@ const attachEventHandlers = () => {
       const reader = new FileReader();
 
       reader.onload = async () => {
-        const fileData = ((reader.result || '').split(',')[1] || '').trim();
         const categorySlug = section.name.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '');
         let photo = {
           id: crypto.randomUUID(),
@@ -849,18 +800,17 @@ const attachEventHandlers = () => {
           date,
           room,
           employeeId,
-          storedInGoogle: false,
         };
-        let uploadNote = `Saved to ${employee.name}'s profile album on this device. Google Drive is not connected.`;
+        let uploadNote = `Saved to ${employee.name}'s profile album on this device.`;
 
-        if (googleScriptConfig.enabled) {
+        if (googleScriptConfig.enabled && await syncEmployeeToGoogle(employee)) {
           try {
             const result = await uploadEmployeePhoto({
               employeeId,
               employeeName: employee.name,
               fileName: photo.name,
               mimeType: file.type || 'image/jpeg',
-              fileData,
+              fileData: ((reader.result || '').split(',')[1] || '').trim(),
               metadata: {
                 category: photo.category,
                 issue: photo.issue,
@@ -872,17 +822,12 @@ const attachEventHandlers = () => {
                 employeeId: photo.employeeId,
               },
             });
-
-            if (result?.ok && result.url) {
-              photo = { ...photo, driveUrl: result.url, storedInGoogle: true, googleId: result.fileId };
-              uploadNote = `Saved to ${employee.name}'s employee album in Google Drive.`;
-            } else {
-              uploadNote = `Saved to ${employee.name}'s profile album on this device. Google Drive upload failed.`;
-              reportGoogleSyncError('Photo upload failed', new Error(result?.message || 'Google Drive upload failed.'));
-            }
+            if (!result?.ok || !result.url) throw new Error(result?.message || 'Google Drive upload failed.');
+            photo = { ...photo, driveUrl: result.url, storedInGoogle: true, googleId: result.fileId };
+            uploadNote = `Saved to ${employee.name}'s profile album on this device and Google Drive.`;
+            clearGoogleSyncError();
           } catch (error) {
-            reportGoogleSyncError('Failed-item photo upload failed', error);
-            uploadNote = `Saved to ${employee.name}'s profile album on this device. Google Drive upload failed.`;
+            reportGoogleSyncError('Photo upload failed', error);
           }
         }
 
@@ -890,10 +835,7 @@ const attachEventHandlers = () => {
           ? normalizeEmployee({ ...currentEmployee, photos: [...getEmployeeAlbum(currentEmployee), photo] })
           : currentEmployee);
         saveState();
-
-        if (googleScriptConfig.enabled) {
-          await syncEmployeeToGoogle(getEmployee(employeeId));
-        }
+        await syncEmployeeToGoogle(getEmployee(employeeId));
 
         const preview = document.getElementById(`failure-photo-preview-${itemId}`);
         if (preview) {
@@ -920,34 +862,25 @@ const attachEventHandlers = () => {
       const reader = new FileReader();
 
       reader.onload = async () => {
-        const base64 = ((reader.result || '').split(',')[1] || '').trim();
         let photo = {
           id: crypto.randomUUID(),
           name: file.name,
           uploadedAt: new Date().toISOString(),
           url: reader.result,
-          storedInGoogle: false,
         };
-
-        if (googleScriptConfig.enabled) {
+        if (googleScriptConfig.enabled && employee && await syncEmployeeToGoogle(employee)) {
           try {
             const result = await uploadEmployeePhoto({
               employeeId,
-              employeeName: employee?.name || employeeId,
+              employeeName: employee.name,
               fileName: file.name,
               mimeType: file.type || 'image/jpeg',
-              fileData: base64,
+              fileData: ((reader.result || '').split(',')[1] || '').trim(),
               metadata: { employeeId, category: 'Employee profile', date: todayISO() },
             });
-
-            if (result && result.ok && result.url) {
-              photo = {
-                ...photo,
-                driveUrl: result.url,
-                storedInGoogle: true,
-                googleId: result.fileId,
-              };
-            }
+            if (!result?.ok || !result.url) throw new Error(result?.message || 'Google Drive upload failed.');
+            photo = { ...photo, driveUrl: result.url, storedInGoogle: true, googleId: result.fileId };
+            clearGoogleSyncError();
           } catch (error) {
             reportGoogleSyncError('Photo upload failed', error);
           }
@@ -962,11 +895,8 @@ const attachEventHandlers = () => {
           return nextEmployee;
         });
 
-        if (employee) {
-          await syncEmployeeToGoogle(getEmployee(employeeId));
-        }
-
         saveState();
+        await syncEmployeeToGoogle(getEmployee(employeeId));
         renderNavigation();
       };
 
@@ -1064,17 +994,15 @@ const attachEventHandlers = () => {
       };
 
       state.employees = state.employees.map((current) => current.id === employeeId ? normalizeEmployee(nextState) : current);
-
       if (googleScriptConfig.enabled) {
         try {
-          const result = await archiveEmployeeInGoogle(employeeId);
-          if (result && result.ok) {
-            console.info('Employee archived in Google Sheets/Drive');
-          } else {
-            throw new Error(result?.message || 'Archive employee failed.');
-          }
+          const employeeResult = await saveEmployeeToGoogle(nextState);
+          if (!employeeResult?.ok) throw new Error(employeeResult?.message || 'Employee sync failed.');
+          const result = await archiveEmployeeInGoogle(employeeId, nextState.isArchived);
+          if (!result?.ok) throw new Error(result?.message || 'Employee archive sync failed.');
+          clearGoogleSyncError();
         } catch (error) {
-          reportGoogleSyncError('Archive employee failed', error);
+          reportGoogleSyncError('Employee archive sync failed', error);
         }
       }
 
@@ -1087,15 +1015,18 @@ const attachEventHandlers = () => {
       const employee = getEmployee(employeeId);
       if (!employee) return;
 
-      const confirmed = window.confirm(`Delete ${employee.name} and all local references? This does not remove the Google Drive folder unless the script is connected.`);
+      const confirmed = window.confirm(`Delete ${employee.name} and all local references?`);
       if (!confirmed) return;
 
       if (googleScriptConfig.enabled) {
         try {
           const result = await deleteEmployeeInGoogle(employeeId);
-          if (!result?.ok) throw new Error(result?.message || 'Delete employee failed.');
+          if (!result?.ok && result?.message !== 'Employee not found') {
+            throw new Error(result?.message || 'Employee delete sync failed.');
+          }
+          clearGoogleSyncError();
         } catch (error) {
-          reportGoogleSyncError('Delete employee failed', error);
+          reportGoogleSyncError('Employee delete sync failed', error);
         }
       }
 
@@ -1142,7 +1073,7 @@ const attachEventHandlers = () => {
             responsibility: document.getElementById(`responsibility-${item.id}`)?.value || '',
             photos: getEmployeeAlbum(getEmployee(employeeId))
               .filter((photo) => photo.itemId === item.id && photo.date === date && photo.room === room)
-              .map((photo) => ({ id: photo.id, name: photo.name, url: photo.url })),
+                .map((photo) => ({ id: photo.id, name: photo.name, url: photo.url, driveUrl: photo.driveUrl })),
           } : null;
           results.push({ itemId: item.id, category: section.name, value, label: item.label, points: item.points, correction });
         });

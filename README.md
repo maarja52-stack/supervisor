@@ -1,58 +1,20 @@
 # Hotel V Housekeeping App
 
-Vite-based housekeeping quality app. The frontend stores its working state in the browser and can sync employee records, inspections, and employee/evidence photos to a bound Google Sheet and its owner's Google Drive.
+Vite-based housekeeping quality app. Working state is stored in the browser. When configured, employee changes, inspections, and photos are also sent to a Google Sheet and the owner's Google Drive through Apps Script. No Google sign-in is used.
 
-## Connect a private Google account
+## Google Apps Script backend
 
-The Apps Script endpoint verifies a Google sign-in token against one configured email before allowing any API action. Employee photo folders are kept private. Do not remove the identity verification or change the folders to public link sharing.
+> **Public access warning:** The Apps Script API is deployed for anyone to call without signing in. Anyone who obtains the web-app URL can read and modify employee and inspection data, delete employee records and photo folders, and upload files to the owner's Drive. Do not use this setup for sensitive data. The URL is included in the public frontend and is not a secret.
 
-### 1. Create a Google Sheet and Apps Script
+1. Open the bound Apps Script project for the Google Sheet.
+2. Replace its `Code.gs` with `google-apps-script/Code.gs` from this repository and save.
+3. Run `authorizeGoogleServices` once in the Apps Script editor and grant the requested Sheets and Drive permissions.
+4. Deploy as a **Web app**, executing as **Me**, with access set to **Anyone**. Copy the deployment URL ending in `/exec`.
+5. Set `GOOGLE_SCRIPT_URL` in `src/config.js` to that `/exec` URL, then build and deploy the frontend.
 
-1. Create or open the Google Sheet that will hold the app data.
-2. In the sheet, open **Extensions → Apps Script**. This creates a script bound to that sheet.
-3. Replace the contents of `Code.gs` with `google-apps-script/Code.gs` from this project, then save.
-4. In Apps Script **Project Settings → Script properties**, add:
-   - `GOOGLE_OAUTH_CLIENT_ID`: the OAuth web client ID from step 2 below.
-   - `GOOGLE_OWNER_EMAIL`: the Google account email that is allowed to use the app.
-5. In the Apps Script editor, select and run `authorizeGoogleServices`. Review and grant the requested Sheets, Drive, and external-request permissions.
+The script creates `Employees`, `Room_Records`, and employee photo folders as needed. Employee and inspection updates are synced when made in the app. Photos are kept in the browser and uploaded to Drive when the backend is configured. Existing browser data is not automatically backfilled to Sheets.
 
-The script creates the `Employees`, `Room_Records`, and `Employee Photos` resources when the app first saves data.
-
-### 2. Create a Google OAuth client ID
-
-1. In Google Cloud Console, select or create a project and configure its OAuth consent screen. For an app in testing, add your Google account as a test user.
-2. Create an OAuth client ID of type **Web application**.
-3. Add the origins from which you will open the app under **Authorized JavaScript origins**. For local development, add `http://localhost:5173`. For this repository's GitHub Pages site, add `https://maarja52-stack.github.io` (do not include `/supervisor/`).
-4. Copy the client ID. This client ID is public and is not an OAuth client secret.
-
-### 3. Deploy the Apps Script API
-
-1. In Apps Script, choose **Deploy → New deployment → Web app**.
-2. Set **Execute as** to **Me**.
-3. Set access to **Anyone** so the separately hosted app can reach the endpoint. The script verifies the Google identity token and only permits `GOOGLE_OWNER_EMAIL`; do not remove that check.
-4. Deploy and copy the web app URL ending in `/exec`.
-
-### 4. Configure and run the frontend
-
-In `src/config.js`, set the two public connection values:
-
-```js
-export const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/your-deployment-id/exec';
-export const GOOGLE_OAUTH_CLIENT_ID = 'your-client-id.apps.googleusercontent.com';
-```
-
-The repository includes a GitHub Actions workflow to publish the app at `https://maarja52-stack.github.io/supervisor/`. In the repository's **Settings → Pages**, set the build and deployment source to **GitHub Actions**. Push the configured project to `main` and wait for the **Deploy to GitHub Pages** workflow to finish.
-
-For local development, use the authorized origin `http://localhost:5173`:
-
-```bash
-npm install
-npm run dev
-```
-
-Open the app from an authorized origin and click the Google sign-in button. The app syncs changes made after sign-in; existing browser data is not automatically uploaded. Photos remain private in Drive, and the app keeps a local preview copy in that browser.
-
-When changing `Code.gs` after deployment, update the existing Apps Script deployment to a new version. Never add an OAuth client secret, password, or Google account token to this repository.
+Whenever `Code.gs` changes, update the existing Apps Script deployment to a new version.
 
 ## Local development
 
