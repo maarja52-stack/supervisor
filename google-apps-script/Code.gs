@@ -262,6 +262,7 @@ function uploadEmployeePhoto(data) {
   const fileData = data && data.fileData ? data.fileData : null;
   const fileName = data && data.fileName ? data.fileName : 'photo.jpg';
   const employeeId = data && data.employeeId ? data.employeeId : null;
+  const photoId = data && data.photoId ? data.photoId : Utilities.getUuid();
 
   if (!fileData || !employeeId) {
     return { ok: false, message: 'Missing photo content or employee ID.' };
@@ -301,6 +302,45 @@ function uploadEmployeePhoto(data) {
   const file = folder.createFile(blob);
   const metadata = data.metadata || {};
   file.setDescription(JSON.stringify(metadata));
+  const uploadedAt = new Date().toISOString();
+  const metadataSheet = ensureSheet('Photo_Metadata', [
+    'photoId',
+    'employeeId',
+    'employeeName',
+    'fileName',
+    'mimeType',
+    'driveFileId',
+    'driveUrl',
+    'folderId',
+    'category',
+    'issue',
+    'itemId',
+    'description',
+    'responsibility',
+    'date',
+    'room',
+    'uploadedAt',
+    'metadataJson',
+  ]);
+  metadataSheet.appendRow([
+    photoId,
+    employeeId,
+    employeeName,
+    fileName,
+    data.mimeType || 'image/jpeg',
+    file.getId(),
+    file.getUrl(),
+    folder.getId(),
+    metadata.category || '',
+    metadata.issue || '',
+    metadata.itemId || '',
+    metadata.description || '',
+    metadata.responsibility || '',
+    metadata.date || '',
+    metadata.room || '',
+    uploadedAt,
+    JSON.stringify(metadata),
+  ]);
 
-  return { ok: true, fileId: file.getId(), url: file.getUrl(), folderId: folder.getId(), metadata };
+  return { ok: true, photoId, fileId: file.getId(), url: file.getUrl(), folderId: folder.getId(), uploadedAt, metadata };
 }

@@ -162,6 +162,10 @@ a {
   overflow-wrap: anywhere;
 }
 
+.google-sync-status.storage-error {
+  color: var(--danger);
+}
+
 .topbar .left {
   display: flex;
   align-items: center;

@@ -3,6 +3,7 @@ import { googleScriptConfig } from './config.js';
 
 const app = document.getElementById('app');
 let googleSyncError = '';
+let localSaveError = '';
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const formatDate = (dateString) => {
@@ -129,7 +130,29 @@ const loadState = () => {
 let state = loadState();
 const viewHistory = [];
 
-const saveState = () => localStorage.setItem('hotel-v-state', JSON.stringify(state));
+const saveState = () => {
+  try {
+    localStorage.setItem('hotel-v-state', JSON.stringify(state));
+    localSaveError = '';
+    const status = document.querySelector('.google-sync-status');
+    if (status) {
+      status.textContent = googleSyncError || (googleScriptConfig.enabled ? 'Google sync enabled' : 'Google sync not configured');
+      status.classList.remove('storage-error');
+    }
+    return true;
+  } catch (error) {
+    localSaveError = error.name === 'QuotaExceededError' || error.name === 'NS_ERROR_DOM_QUOTA_REACHED'
+      ? 'Browser storage is full. Remove some saved photos to continue saving.'
+      : 'Could not save changes in this browser.';
+    console.error(localSaveError, error);
+    const status = document.querySelector('.google-sync-status');
+    if (status) {
+      status.textContent = localSaveError;
+      status.classList.add('storage-error');
+    }
+    return false;
+  }
+};
 
 const normalizeEmployee = (employee) => ({
   ...employee,
@@ -147,17 +170,50 @@ const getEmployee = (id) => state.employees.find((employee) => employee.id === i
 
 const getEmployeeAlbum = (employee) => Array.isArray(employee?.photos) ? employee.photos : [];
 
+const compressPhoto = async (file) => {
+  const image = new Image();
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    await new Promise((resolve, reject) => {
+      image.onload = resolve;
+      image.onerror = () => reject(new Error('The selected photo could not be opened.'));
+      image.src = objectUrl;
+    });
+
+    const scale = Math.min(1, 1600 / Math.max(image.naturalWidth, image.naturalHeight));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+    canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+    canvas.getContext('2d').drawImage(image, 0, 0, canvas.width, canvas.height);
+
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.76);
+    return {
+      dataUrl,
+      fileData: dataUrl.split(',')[1],
+      mimeType: 'image/jpeg',
+    };
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+};
+
 const reportGoogleSyncError = (context, error) => {
   googleSyncError = `${context}: ${error.message || 'Google request failed.'}`;
   console.error(googleSyncError, error);
   const status = document.querySelector('.google-sync-status');
-  if (status) status.textContent = googleSyncError;
+  if (status) {
+    status.textContent = localSaveError || googleSyncError;
+    status.classList.toggle('storage-error', Boolean(localSaveError));
+  }
 };
 
 const clearGoogleSyncError = () => {
   googleSyncError = '';
   const status = document.querySelector('.google-sync-status');
-  if (status) status.textContent = googleScriptConfig.enabled ? 'Google sync enabled' : 'Google sync not configured';
+  if (status) {
+    status.textContent = localSaveError || (googleScriptConfig.enabled ? 'Google sync enabled' : 'Google sync not configured');
+    status.classList.toggle('storage-error', Boolean(localSaveError));
+  }
 };
 
 const syncEmployeeToGoogle = async (employee) => {
@@ -277,7 +333,7 @@ const renderNavigation = () => {
               `).join('')}
             </nav>
           </details>
-          <div class="google-sync-status" role="status" aria-live="polite">${googleSyncError || (googleScriptConfig.enabled ? 'Google sync enabled' : 'Google sync not configured')}</div>
+          <div class="google-sync-status ${localSaveError ? 'storage-error' : ''}" role="status" aria-live="polite">${localSaveError || googleSyncError || (googleScriptConfig.enabled ? 'Google sync enabled' : 'Google sync not configured')}</div>
           <div class="tag">Housekeeping</div>
         </header>
         <main class="page">
@@ -751,7 +807,7 @@ const attachEventHandlers = () => {
     }
   });
 
-  document.addEventListener('change', (event) => {
+  document.addEventListener('change', async (event) => {
     const target = event.target;
 
     if (target.id === 'history-room') {
@@ -786,12 +842,21 @@ const attachEventHandlers = () => {
       const reader = new FileReader();
 
       reader.onload = async () => {
+        let compressedPhoto;
+        try {
+          compressedPhoto = await compressPhoto(file);
+        } catch (error) {
+          console.error('Could not process inspection photo.', error);
+          window.alert(error.message || 'Could not process the selected photo.');
+          return;
+        }
+
         const categorySlug = section.name.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '');
         let photo = {
           id: crypto.randomUUID(),
           name: `Room-${room}_${date}_${categorySlug}_${file.name}`,
           uploadedAt: new Date().toISOString(),
-          url: reader.result,
+          url: compressedPhoto.dataUrl,
           category: section.name,
           issue: item.label,
           itemId,
@@ -806,11 +871,12 @@ const attachEventHandlers = () => {
         if (googleScriptConfig.enabled && await syncEmployeeToGoogle(employee)) {
           try {
             const result = await uploadEmployeePhoto({
+              photoId: photo.id,
               employeeId,
               employeeName: employee.name,
               fileName: photo.name,
-              mimeType: file.type || 'image/jpeg',
-              fileData: ((reader.result || '').split(',')[1] || '').trim(),
+              mimeType: compressedPhoto.mimeType,
+              fileData: compressedPhoto.fileData,
               metadata: {
                 category: photo.category,
                 issue: photo.issue,
@@ -862,20 +928,30 @@ const attachEventHandlers = () => {
       const reader = new FileReader();
 
       reader.onload = async () => {
+        let compressedPhoto;
+        try {
+          compressedPhoto = await compressPhoto(file);
+        } catch (error) {
+          console.error('Could not process employee photo.', error);
+          window.alert(error.message || 'Could not process the selected photo.');
+          return;
+        }
+
         let photo = {
           id: crypto.randomUUID(),
           name: file.name,
           uploadedAt: new Date().toISOString(),
-          url: reader.result,
+          url: compressedPhoto.dataUrl,
         };
         if (googleScriptConfig.enabled && employee && await syncEmployeeToGoogle(employee)) {
           try {
             const result = await uploadEmployeePhoto({
+              photoId: photo.id,
               employeeId,
               employeeName: employee.name,
               fileName: file.name,
-              mimeType: file.type || 'image/jpeg',
-              fileData: ((reader.result || '').split(',')[1] || '').trim(),
+              mimeType: compressedPhoto.mimeType,
+              fileData: compressedPhoto.fileData,
               metadata: { employeeId, category: 'Employee profile', date: todayISO() },
             });
             if (!result?.ok || !result.url) throw new Error(result?.message || 'Google Drive upload failed.');
@@ -1152,13 +1228,13 @@ const updateInspectionScore = () => {
 
 const setActiveSection = (sectionIndex) => {
   state.activeSection = Math.max(0, Math.min(sectionIndex, state.sections.length - 1));
-  saveState();
   document.querySelectorAll('.tab-btn').forEach((button) => {
     button.classList.toggle('active', Number(button.dataset.sectionIndex) === state.activeSection);
   });
   document.querySelectorAll('[data-section-panel]').forEach((panel) => {
     panel.classList.toggle('hidden', Number(panel.dataset.sectionPanel) !== state.activeSection);
   });
+  saveState();
 };
 
 registerGoogleSync();
