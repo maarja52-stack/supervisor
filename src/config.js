@@ -1,5 +1,6 @@
-export const GOOGLE_SCRIPT_URL = '';
-export const GOOGLE_OAUTH_CLIENT_ID = '';
+export const GOOGLE_SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxY4o5WgaF1ZEWr-7CIl7cDWlNMKKDNvlJB8M1UQ5xkWAEzI6gNoqWunTYvVdRHh6zZ/exec';
+
+export const GOOGLE_OAUTH_CLIENT_ID = 'YOUR_GOOGLE_OAUTH_CLIENT_ID';
 
 export const googleScriptConfig = {
   url: GOOGLE_SCRIPT_URL.trim(),
