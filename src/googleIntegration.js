@@ -1,6 +1,36 @@
 import { googleScriptConfig } from './config.js';
 
 const getUrl = () => googleScriptConfig.url;
+let identityToken = '';
+let identityApiPromise;
+
+export function setGoogleIdentityToken(token) {
+  identityToken = token;
+}
+
+export function clearGoogleIdentityToken() {
+  identityToken = '';
+}
+
+export function loadGoogleIdentityApi() {
+  if (window.google?.accounts?.id) return Promise.resolve();
+  if (identityApiPromise) return identityApiPromise;
+
+  identityApiPromise = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.async = true;
+    script.defer = true;
+    script.onload = () => resolve();
+    script.onerror = () => {
+      identityApiPromise = null;
+      reject(new Error('Could not load Google Sign-In.'));
+    };
+    document.head.append(script);
+  });
+
+  return identityApiPromise;
+}
 
 export async function callGoogleScript(action, payload = {}) {
   const url = getUrl();
@@ -12,11 +42,18 @@ export async function callGoogleScript(action, payload = {}) {
       message: 'Google Apps Script URL is not configured yet.',
     };
   }
+  if (!identityToken) {
+    return {
+      ok: false,
+      mode: 'unauthenticated',
+      message: 'Sign in with your Google account to connect Drive.',
+    };
+  }
 
   const response = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ action, payload }),
+    body: JSON.stringify({ action, payload, identityToken }),
   });
 
   if (!response.ok) {

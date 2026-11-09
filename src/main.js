@@ -1,7 +1,10 @@
-import { registerGoogleSync, saveEmployeeToGoogle, saveInspectionToGoogle, archiveEmployeeInGoogle, deleteEmployeeInGoogle, uploadEmployeePhoto } from './googleIntegration.js';
+import { registerGoogleSync, saveEmployeeToGoogle, saveInspectionToGoogle, archiveEmployeeInGoogle, deleteEmployeeInGoogle, uploadEmployeePhoto, setGoogleIdentityToken, clearGoogleIdentityToken, loadGoogleIdentityApi, callGoogleScript } from './googleIntegration.js';
 import { googleScriptConfig } from './config.js';
 
 const app = document.getElementById('app');
+let googleAccountEmail = '';
+let googleSyncError = '';
+let googleIdentityInitialized = false;
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const formatDate = (dateString) => {
@@ -146,19 +149,35 @@ const getEmployee = (id) => state.employees.find((employee) => employee.id === i
 
 const getEmployeeAlbum = (employee) => Array.isArray(employee?.photos) ? employee.photos : [];
 
+const reportGoogleSyncError = (context, error) => {
+  googleSyncError = `${context}: ${error.message || 'Google request failed.'}`;
+  console.error(googleSyncError, error);
+  const status = document.querySelector('.google-sync-error');
+  if (status) status.textContent = googleSyncError;
+};
+
+const clearGoogleSyncError = () => {
+  googleSyncError = '';
+  const status = document.querySelector('.google-sync-error');
+  if (status) status.textContent = '';
+};
+
 const syncEmployeeToGoogle = async (employee) => {
   if (!googleScriptConfig.enabled || !employee) return;
 
   try {
-    const payload = {
-      ...normalizeEmployee(employee),
+    const payload = normalizeEmployee(employee);
+    delete payload.photos;
+    Object.assign(payload, {
       active: employee.active !== false && employee.status !== 'inactive',
       status: employee.status || (employee.active === false ? 'inactive' : 'active'),
-    };
+    });
 
-    await saveEmployeeToGoogle(payload);
+    const result = await saveEmployeeToGoogle(payload);
+    if (!result?.ok) throw new Error(result?.message || 'Employee sync failed.');
+    clearGoogleSyncError();
   } catch (error) {
-    console.error('Google sync failed for employee', error);
+    reportGoogleSyncError('Employee sync failed', error);
   }
 };
 
@@ -166,9 +185,11 @@ const syncInspectionToGoogle = async (inspection) => {
   if (!googleScriptConfig.enabled || !inspection) return;
 
   try {
-    await saveInspectionToGoogle(inspection);
+    const result = await saveInspectionToGoogle(inspection);
+    if (!result?.ok) throw new Error(result?.message || 'Inspection sync failed.');
+    clearGoogleSyncError();
   } catch (error) {
-    console.error('Google sync failed for inspection', error);
+    reportGoogleSyncError('Inspection sync failed', error);
   }
 };
 
@@ -202,7 +223,7 @@ const renderNavigation = () => {
         <div>
           <div class="brand">HOTEL V<span class="dot">.</span></div>
           <p class="sidebar-caption">Nesplein · Housekeeping performance</p>
-          <div class="tag" style="margin-top: 16px;">Fictional demo</div>
+          <div class="tag" style="margin-top: 16px;">Housekeeping</div>
         </div>
         <nav class="desktop-nav" aria-label="Main navigation" style="margin-top: 24px; display:grid; gap:10px;">
           ${navItems.map((item) => `
@@ -216,7 +237,7 @@ const renderNavigation = () => {
             </button>
           `).join('')}
         </nav>
-        <p class="sidebar-footnote">A workflow prototype for hotel management. No actual employee records.</p>
+        <p class="sidebar-footnote">Housekeeping quality and employee records.</p>
       </aside>
 
       <div class="app-main">
@@ -232,7 +253,8 @@ const renderNavigation = () => {
               `).join('')}
             </nav>
           </details>
-          <div class="tag">Demonstration</div>
+          <div class="google-auth-area" id="google-auth-area"></div>
+          <div class="tag">Housekeeping</div>
         </header>
         <main class="page">
           ${renderCurrentView()}
@@ -241,6 +263,77 @@ const renderNavigation = () => {
     </div>
   `;
 
+  renderGoogleSignIn();
+};
+
+const renderGoogleSignIn = async () => {
+  const container = document.getElementById('google-auth-area');
+  if (!container) return;
+
+  if (!googleScriptConfig.enabled || !googleScriptConfig.oauthClientId) {
+    container.textContent = 'Google Drive setup required';
+    container.title = 'Add the Apps Script URL and Google OAuth client ID to src/config.js.';
+    return;
+  }
+
+  if (googleAccountEmail) {
+    const account = document.createElement('span');
+    account.className = 'google-account';
+    account.textContent = `Drive connected: ${googleAccountEmail}`;
+    const status = document.createElement('span');
+    status.className = 'google-sync-error';
+    status.setAttribute('role', 'status');
+    status.setAttribute('aria-live', 'polite');
+    status.textContent = googleSyncError;
+    const disconnect = document.createElement('button');
+    disconnect.type = 'button';
+    disconnect.className = 'btn secondary google-disconnect';
+    disconnect.textContent = 'Disconnect';
+    disconnect.addEventListener('click', () => {
+      clearGoogleIdentityToken();
+      googleAccountEmail = '';
+      window.google?.accounts?.id?.disableAutoSelect();
+      renderGoogleSignIn();
+    });
+    container.replaceChildren(account, status, disconnect);
+    return;
+  }
+
+  container.textContent = 'Loading Google sign-in…';
+  try {
+    await loadGoogleIdentityApi();
+    if (!container.isConnected) return;
+    container.replaceChildren();
+    if (!googleIdentityInitialized) {
+      window.google.accounts.id.initialize({
+        client_id: googleScriptConfig.oauthClientId,
+        callback: async ({ credential }) => {
+          setGoogleIdentityToken(credential);
+          try {
+            const result = await callGoogleScript('verifyAccess');
+            if (!result.ok) throw new Error(result.message || 'Google sign-in failed.');
+            googleAccountEmail = result.email;
+            clearGoogleSyncError();
+            renderNavigation();
+          } catch (error) {
+            clearGoogleIdentityToken();
+            window.alert(error.message || 'Could not connect to Google Drive.');
+          }
+        },
+      });
+      googleIdentityInitialized = true;
+    }
+    window.google.accounts.id.renderButton(container, {
+      type: 'standard',
+      theme: 'outline',
+      size: 'medium',
+      text: 'signin_with',
+      shape: 'pill',
+    });
+  } catch (error) {
+    container.textContent = 'Google sign-in unavailable';
+    console.error(error);
+  }
 };
 
 const renderCurrentView = () => {
@@ -781,13 +874,14 @@ const attachEventHandlers = () => {
             });
 
             if (result?.ok && result.url) {
-              photo = { ...photo, url: result.url, storedInGoogle: true, googleId: result.fileId };
+              photo = { ...photo, driveUrl: result.url, storedInGoogle: true, googleId: result.fileId };
               uploadNote = `Saved to ${employee.name}'s employee album in Google Drive.`;
             } else {
               uploadNote = `Saved to ${employee.name}'s profile album on this device. Google Drive upload failed.`;
+              reportGoogleSyncError('Photo upload failed', new Error(result?.message || 'Google Drive upload failed.'));
             }
           } catch (error) {
-            console.error('Failed-item photo upload failed:', error);
+            reportGoogleSyncError('Failed-item photo upload failed', error);
             uploadNote = `Saved to ${employee.name}'s profile album on this device. Google Drive upload failed.`;
           }
         }
@@ -849,13 +943,13 @@ const attachEventHandlers = () => {
             if (result && result.ok && result.url) {
               photo = {
                 ...photo,
-                url: result.url,
+                driveUrl: result.url,
                 storedInGoogle: true,
                 googleId: result.fileId,
               };
             }
           } catch (error) {
-            console.error('Photo upload to Google failed:', error);
+            reportGoogleSyncError('Photo upload failed', error);
           }
         }
 
@@ -976,9 +1070,11 @@ const attachEventHandlers = () => {
           const result = await archiveEmployeeInGoogle(employeeId);
           if (result && result.ok) {
             console.info('Employee archived in Google Sheets/Drive');
+          } else {
+            throw new Error(result?.message || 'Archive employee failed.');
           }
         } catch (error) {
-          console.error('Archive employee failed:', error);
+          reportGoogleSyncError('Archive employee failed', error);
         }
       }
 
@@ -996,9 +1092,10 @@ const attachEventHandlers = () => {
 
       if (googleScriptConfig.enabled) {
         try {
-          await deleteEmployeeInGoogle(employeeId);
+          const result = await deleteEmployeeInGoogle(employeeId);
+          if (!result?.ok) throw new Error(result?.message || 'Delete employee failed.');
         } catch (error) {
-          console.error('Delete employee failed:', error);
+          reportGoogleSyncError('Delete employee failed', error);
         }
       }
 

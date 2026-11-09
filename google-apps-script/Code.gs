@@ -2,11 +2,29 @@ function doGet() {
   return ContentService.createTextOutput(JSON.stringify({ ok: true, message: 'Housekeeping API is live.' })).setMimeType(ContentService.MimeType.JSON);
 }
 
+function authorizeGoogleServices() {
+  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+  if (!spreadsheet) {
+    throw new Error('Open this Apps Script project from its Google Sheet.');
+  }
+
+  const driveName = DriveApp.getRootFolder().getName();
+  UrlFetchApp.fetch('https://oauth2.googleapis.com/tokeninfo?id_token=invalid', {
+    muteHttpExceptions: true,
+  });
+  return { spreadsheet: spreadsheet.getName(), drive: driveName };
+}
+
 function doPost(e) {
   try {
-    const payload = e && e.postData && e.postData.contents ? JSON.parse(e.postData.contents) : {};
-    const action = payload.action || 'listEmployees';
-    const data = payload.payload || {};
+    const request = e && e.postData && e.postData.contents ? JSON.parse(e.postData.contents) : {};
+    const user = verifyIdentityToken(request.identityToken);
+    const action = request.action || 'listEmployees';
+    const data = request.payload || {};
+
+    if (action === 'verifyAccess') {
+      return jsonResponse({ ok: true, email: user.email });
+    }
 
     switch (action) {
       case 'listEmployees':
@@ -27,8 +45,42 @@ function doPost(e) {
         return jsonResponse({ ok: false, message: 'Unknown action: ' + action });
     }
   } catch (error) {
-    return jsonResponse({ ok: false, message: String(error), stack: error && error.stack ? error.stack : '' });
+    return jsonResponse({ ok: false, message: error && error.message ? error.message : 'Request failed.' });
   }
+}
+
+function verifyIdentityToken(token) {
+  if (!token) {
+    throw new Error('Sign in with the authorized Google account.');
+  }
+
+  const properties = PropertiesService.getScriptProperties();
+  const clientId = properties.getProperty('GOOGLE_OAUTH_CLIENT_ID');
+  const ownerEmail = (properties.getProperty('GOOGLE_OWNER_EMAIL') || '').trim().toLowerCase();
+  if (!clientId || !ownerEmail) {
+    throw new Error('Google sign-in is not configured in Apps Script project settings.');
+  }
+
+  const response = UrlFetchApp.fetch(
+    'https://oauth2.googleapis.com/tokeninfo?id_token=' + encodeURIComponent(token),
+    { muteHttpExceptions: true }
+  );
+  if (response.getResponseCode() !== 200) {
+    throw new Error('Google sign-in expired or could not be verified. Please sign in again.');
+  }
+
+  const claims = JSON.parse(response.getContentText());
+  const email = String(claims.email || '').trim().toLowerCase();
+  const verifiedEmail = claims.email_verified === true || claims.email_verified === 'true';
+  if (
+    claims.aud !== clientId ||
+    !verifiedEmail ||
+    email !== ownerEmail
+  ) {
+    throw new Error('This Google account is not authorized to use this app.');
+  }
+
+  return { email };
 }
 
 function jsonResponse(value) {
@@ -76,9 +128,10 @@ function ensureEmployeeFolder(employeeId, displayName) {
   if (iterator.hasNext()) {
     folder = iterator.next();
   } else {
-    folder = mainFolder.createFolder(displayName || employeeId);
-    folder.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    folder = mainFolder.createFolder(employeeId);
+    folder.setDescription(displayName || employeeId);
   }
+  folder.setSharing(DriveApp.Access.PRIVATE, DriveApp.Permission.NONE);
   return folder;
 }
 
@@ -151,8 +204,11 @@ function archiveEmployee(employeeId) {
       if (folderId) {
         try {
           const folder = DriveApp.getFolderById(folderId);
-          const archiveFolder = DriveApp.getRootFolder().getFoldersByName('Archived Employee Photos').next();
-          const archiveRoot = archiveFolder || DriveApp.getRootFolder().createFolder('Archived Employee Photos');
+          const root = DriveApp.getRootFolder();
+          const archiveFolders = root.getFoldersByName('Archived Employee Photos');
+          const archiveRoot = archiveFolders.hasNext()
+            ? archiveFolders.next()
+            : root.createFolder('Archived Employee Photos');
           folder.moveTo(archiveRoot);
         } catch (error) {
           // Ignore if folder is not found.
