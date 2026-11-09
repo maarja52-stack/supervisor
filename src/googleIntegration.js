@@ -83,6 +83,10 @@ export async function getRecordsFromGoogle() {
   return callGoogleScript('listRecords');
 }
 
+export async function getSnapshotFromGoogle() {
+  return callGoogleScript('getSnapshot');
+}
+
 export async function saveEmployeeToGoogle(employee) {
   return callGoogleScript('saveEmployee', employee);
 }
@@ -108,6 +112,7 @@ export function registerGoogleSync() {
     callGoogleScript,
     getEmployeesFromGoogle,
     getRecordsFromGoogle,
+    getSnapshotFromGoogle,
     saveEmployeeToGoogle,
     archiveEmployeeInGoogle,
     deleteEmployeeInGoogle,

@@ -37,6 +37,9 @@ function doPost(e) {
       case 'listRecords':
         result = listRecords();
         break;
+      case 'getSnapshot':
+        result = getSnapshot();
+        break;
       case 'saveEmployee':
         result = saveEmployee(data);
         break;
@@ -127,18 +130,25 @@ function ensureEmployeeFolder(employeeId, displayName) {
 }
 
 function listEmployees() {
-  const sheet = ensureSheet('Employees', EMPLOYEE_HEADERS);
-  migrateArchivedEmployees_(getEmployeeSheets_());
+  const sheets = getEmployeeSheets_();
+  migrateArchivedEmployees_(sheets);
+  return {
+    ok: true,
+    employees: [...sheetRecords_(sheets.active), ...sheetRecords_(sheets.archived)],
+  };
+}
+
+function sheetRecords_(sheet, keyColumn) {
   const rows = sheet.getDataRange().getValues();
-  const headers = rows[0];
-  const data = rows.slice(1).map((row) => {
+  const headers = rows[0] || [];
+  const recordKey = keyColumn || 'id';
+  return rows.slice(1).map((row) => {
     const record = {};
     headers.forEach((header, index) => {
-      record[header] = row[index] || '';
+      record[header] = row[index] ?? '';
     });
     return record;
-  }).filter((row) => row.id);
-  return { ok: true, employees: data };
+  }).filter((record) => record[recordKey]);
 }
 
 function getEmployeeSheets_() {
@@ -299,12 +309,50 @@ function listRecords() {
   const data = rows.slice(1).map((row) => {
     const record = {};
     headers.forEach((header, index) => {
-      record[header] = row[index] || '';
+      record[header] = row[index] ?? '';
     });
     return record;
   }).filter((row) => row.id);
 
   return { ok: true, records: data };
+}
+
+function getSnapshot() {
+  const employees = listEmployees().employees;
+  const records = listRecords().records;
+  const photos = listPhotos().photos;
+  return { ok: true, employees, records, photos };
+}
+
+function listPhotos() {
+  const sheet = ensureSheet('Photo_Metadata', [
+    'photoId',
+    'employeeId',
+    'employeeName',
+    'fileName',
+    'mimeType',
+    'driveFileId',
+    'driveUrl',
+    'folderId',
+    'category',
+    'issue',
+    'itemId',
+    'description',
+    'responsibility',
+    'date',
+    'room',
+    'uploadedAt',
+    'metadataJson',
+  ]);
+  const photos = sheetRecords_(sheet, 'photoId').map((photo) => {
+    const file = DriveApp.getFileById(photo.driveFileId);
+    file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+    return {
+      ...photo,
+      url: 'https://drive.google.com/uc?export=view&id=' + encodeURIComponent(photo.driveFileId),
+    };
+  });
+  return { ok: true, photos };
 }
 
 function saveInspection(inspection) {
@@ -390,6 +438,7 @@ function uploadEmployeePhoto(data) {
 
   const blob = Utilities.newBlob(Utilities.base64Decode(fileData), data.mimeType || 'image/jpeg', fileName);
   const file = folder.createFile(blob);
+  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
   const metadata = data.metadata || {};
   file.setDescription(JSON.stringify(metadata));
   const uploadedAt = new Date().toISOString();
@@ -419,7 +468,7 @@ function uploadEmployeePhoto(data) {
     fileName,
     data.mimeType || 'image/jpeg',
     file.getId(),
-    file.getUrl(),
+    'https://drive.google.com/uc?export=view&id=' + encodeURIComponent(file.getId()),
     folder.getId(),
     metadata.category || '',
     metadata.issue || '',
@@ -432,5 +481,13 @@ function uploadEmployeePhoto(data) {
     JSON.stringify(metadata),
   ]);
 
-  return { ok: true, photoId, fileId: file.getId(), url: file.getUrl(), folderId: folder.getId(), uploadedAt, metadata };
+  return {
+    ok: true,
+    photoId,
+    fileId: file.getId(),
+    url: 'https://drive.google.com/uc?export=view&id=' + encodeURIComponent(file.getId()),
+    folderId: folder.getId(),
+    uploadedAt,
+    metadata,
+  };
 }

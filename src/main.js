@@ -1,4 +1,4 @@
-import { registerGoogleSync, saveEmployeeToGoogle, saveInspectionToGoogle, archiveEmployeeInGoogle, deleteEmployeeInGoogle, uploadEmployeePhoto } from './googleIntegration.js';
+import { registerGoogleSync, getSnapshotFromGoogle, saveEmployeeToGoogle, saveInspectionToGoogle, archiveEmployeeInGoogle, deleteEmployeeInGoogle, uploadEmployeePhoto } from './googleIntegration.js';
 import { googleScriptConfig } from './config.js';
 
 const app = document.getElementById('app');
@@ -169,7 +169,7 @@ const normalizeEmployee = (employee) => ({
   contractType: employee.contractType || '',
   active: employee.active !== false && employee.status !== 'inactive',
   status: employee.status || (employee.active === false ? 'inactive' : 'active'),
-  isArchived: Boolean(employee.isArchived),
+  isArchived: employee.isArchived === true || String(employee.isArchived).toUpperCase() === 'TRUE',
   albumFolderId: employee.albumFolderId || '',
   photos: Array.isArray(employee.photos) ? employee.photos : [],
 });
@@ -177,6 +177,89 @@ const normalizeEmployee = (employee) => ({
 const getEmployee = (id) => state.employees.find((employee) => employee.id === id);
 
 const getEmployeeAlbum = (employee) => Array.isArray(employee?.photos) ? employee.photos : [];
+
+const parseJsonField = (value, fallback) => {
+  if (Array.isArray(value) || (value && typeof value === 'object')) return value;
+  if (typeof value !== 'string' || !value) return fallback;
+  try {
+    return JSON.parse(value);
+  } catch (error) {
+    console.error('Could not parse data from Google Sheets.', error);
+    return fallback;
+  }
+};
+
+const syncSharedDataFromGoogle = async () => {
+  if (!googleScriptConfig.enabled) return;
+
+  try {
+    const snapshot = await getSnapshotFromGoogle();
+    if (!snapshot?.ok) throw new Error(snapshot?.message || 'Could not load shared Google data.');
+
+    const existingEmployees = new Map(state.employees.map((employee) => [employee.id, employee]));
+    const photosById = new Map((snapshot.photos || []).map((photo) => [photo.photoId, {
+      id: photo.photoId,
+      name: photo.fileName,
+      url: photo.url,
+      driveUrl: photo.url,
+      uploadedAt: photo.uploadedAt,
+      category: photo.category || '',
+      issue: photo.issue || '',
+      itemId: photo.itemId || '',
+      description: photo.description || '',
+      responsibility: photo.responsibility || '',
+      date: photo.date || '',
+      room: photo.room || '',
+      employeeId: photo.employeeId,
+      storedInGoogle: true,
+      googleId: photo.driveFileId,
+    }]));
+    const photosByEmployee = new Map();
+    for (const photo of photosById.values()) {
+      const photos = photosByEmployee.get(photo.employeeId) || [];
+      photos.push(photo);
+      photosByEmployee.set(photo.employeeId, photos);
+    }
+
+    state.employees = (snapshot.employees || []).map((employee) => {
+      const localPhotos = getEmployeeAlbum(existingEmployees.get(employee.id));
+      const cloudPhotos = photosByEmployee.get(employee.id) || [];
+      const mergedPhotos = new Map([...localPhotos, ...cloudPhotos].map((photo) => [photo.id, photo]));
+      return normalizeEmployee({ ...employee, photos: [...mergedPhotos.values()] });
+    });
+
+    const photoForInspection = (photo) => {
+      const cloudPhoto = photosById.get(photo.id);
+      return cloudPhoto ? { ...photo, ...cloudPhoto } : photo;
+    };
+    state.inspections = (snapshot.records || []).map((record) => {
+      const results = parseJsonField(record.results, []);
+      const corrections = parseJsonField(record.corrections, []);
+      return {
+        ...record,
+        percent: Number(record.percent) || 0,
+        failed: Number(record.failed) || 0,
+        scored: Number(record.scored) || 0,
+        possible: Number(record.possible) || 0,
+        results: results.map((result) => ({
+          ...result,
+          correction: result.correction ? {
+            ...result.correction,
+            photos: (result.correction.photos || []).map(photoForInspection),
+          } : null,
+        })),
+        corrections: corrections.map((correction) => ({
+          ...correction,
+          photos: (correction.photos || []).map(photoForInspection),
+        })),
+      };
+    });
+    saveState();
+    clearGoogleSyncError();
+  } catch (error) {
+    reportGoogleSyncError('Shared data sync failed', error);
+  }
+};
 
 const compressPhoto = async (file) => {
   const image = new Image();
@@ -1294,5 +1377,8 @@ const setActiveSection = (sectionIndex) => {
 };
 
 registerGoogleSync();
-renderNavigation();
-attachEventHandlers();
+if (googleScriptConfig.enabled) app.textContent = 'Loading shared data...';
+syncSharedDataFromGoogle().finally(() => {
+  renderNavigation();
+  attachEventHandlers();
+});
