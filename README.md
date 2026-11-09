@@ -14,7 +14,7 @@ Vite-based housekeeping quality app. Working state is stored in the browser. Whe
 
 The script creates `Employees` (including starting date and contract type), `Room_Records`, and `Photo_Metadata` tabs, plus employee photo folders, as needed. New employee profiles can be added from the Employees page with a starting date and a permanent, fixed-term, or on-call contract type. Employee and inspection updates are synced when made in the app. Photo files are stored in Drive; their employee, file, and inspection metadata is recorded in `Photo_Metadata`. Existing browser data is not automatically backfilled to Sheets.
 
-Whenever `Code.gs` changes, update the existing Apps Script deployment to a new version.
+The frontend submits through a hidden form/iframe so it can receive Apps Script responses without browser CORS blocking. Whenever `Code.gs` changes, update the existing Apps Script deployment to a new version.
 
 ## Local development
 

@@ -15,32 +15,61 @@ function authorizeGoogleServices() {
 }
 
 function doPost(e) {
+  const requestId = e && e.parameter && e.parameter.requestId ? e.parameter.requestId : '';
+  const formRequest = e && e.parameter && e.parameter.request ? e.parameter.request : '';
   try {
-    const request = e && e.postData && e.postData.contents ? JSON.parse(e.postData.contents) : {};
+    const body = e && e.postData && e.postData.contents ? e.postData.contents : '';
+    const request = formRequest
+      ? JSON.parse(formRequest)
+      : body
+        ? JSON.parse(body)
+        : {};
     const action = request.action || 'listEmployees';
     const data = request.payload || {};
+    let result;
 
     switch (action) {
       case 'listEmployees':
-        return jsonResponse(listEmployees());
+        result = listEmployees();
+        break;
       case 'listRecords':
-        return jsonResponse(listRecords());
+        result = listRecords();
+        break;
       case 'saveEmployee':
-        return jsonResponse(saveEmployee(data));
+        result = saveEmployee(data);
+        break;
       case 'archiveEmployee':
-        return jsonResponse(archiveEmployee(data.employeeId, data.isArchived));
+        result = archiveEmployee(data.employeeId, data.isArchived);
+        break;
       case 'deleteEmployee':
-        return jsonResponse(deleteEmployee(data.employeeId));
+        result = deleteEmployee(data.employeeId);
+        break;
       case 'saveInspection':
-        return jsonResponse(saveInspection(data));
+        result = saveInspection(data);
+        break;
       case 'uploadPhoto':
-        return jsonResponse(uploadEmployeePhoto(data));
+        result = uploadEmployeePhoto(data);
+        break;
       default:
-        return jsonResponse({ ok: false, message: 'Unknown action: ' + action });
+        result = { ok: false, message: 'Unknown action: ' + action };
     }
+
+    return formRequest
+      ? htmlResponse({ requestId, result })
+      : jsonResponse(result);
   } catch (error) {
-    return jsonResponse({ ok: false, message: error && error.message ? error.message : 'Request failed.' });
+    const message = error && error.message ? error.message : 'Request failed.';
+    return formRequest
+      ? htmlResponse({ requestId, error: message })
+      : jsonResponse({ ok: false, message });
   }
+}
+
+function htmlResponse(value) {
+  const message = JSON.stringify(value).replace(/</g, '\\u003c');
+  return HtmlService
+    .createHtmlOutput('<!doctype html><script>window.parent.postMessage(' + message + ', "*");</script>')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 
 function jsonResponse(value) {
