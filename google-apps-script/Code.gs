@@ -73,7 +73,7 @@ function doPost(e) {
 function htmlResponse(value) {
   const message = JSON.stringify(value).replace(/</g, '\\u003c');
   return HtmlService
-    .createHtmlOutput('<!doctype html><script>window.parent.postMessage(' + message + ', "*");</script>')
+    .createHtmlOutput('<!doctype html><script>window.top.postMessage(' + message + ', "*");</script>')
     .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
 }
 

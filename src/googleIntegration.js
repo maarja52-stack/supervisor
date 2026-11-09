@@ -46,10 +46,7 @@ export async function callGoogleScript(action, payload = {}) {
     };
 
     const onMessage = (event) => {
-      if (
-        event.source !== iframe.contentWindow
-        || event.data?.requestId !== requestId
-      ) return;
+      if (event.data?.requestId !== requestId) return;
 
       cleanup();
       if (event.data.error) {
