@@ -125,7 +125,7 @@ const loadState = () => {
       ...structuredClone(defaultState),
       ...parsed,
       currentView: parsed.currentView === 'rooms' ? 'dashboard' : parsed.currentView,
-      employees: parsed.employees?.length ? parsed.employees : defaultEmployees,
+      employees: Array.isArray(parsed.employees) ? parsed.employees : defaultEmployees,
       sections: parsed.sections?.length ? parsed.sections : JSON.parse(JSON.stringify(baseSections)),
       draftSections: parsed.draftSections?.length ? parsed.draftSections : JSON.parse(JSON.stringify(baseSections)),
     };
