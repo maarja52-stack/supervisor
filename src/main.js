@@ -4,6 +4,13 @@ import { googleScriptConfig } from './config.js';
 const app = document.getElementById('app');
 let googleSyncError = '';
 let localSaveError = '';
+const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (character) => ({
+  '&': '&amp;',
+  '<': '&lt;',
+  '>': '&gt;',
+  '"': '&quot;',
+  "'": '&#39;',
+}[character]));
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const formatDate = (dateString) => {
@@ -83,10 +90,10 @@ const baseSections = [
 ];
 
 const defaultEmployees = [
-  { id: 'emp-1', name: 'Noor van Dijk', startDate: '2024-01-15', active: true, status: 'active', isArchived: false, albumFolderId: '', photos: [] },
-  { id: 'emp-2', name: 'Samira El Amrani', startDate: '2024-03-04', active: true, status: 'active', isArchived: false, albumFolderId: '', photos: [] },
-  { id: 'emp-3', name: 'Luca de Vries', startDate: '2024-06-10', active: true, status: 'active', isArchived: false, albumFolderId: '', photos: [] },
-  { id: 'emp-4', name: 'Ari Hassan', startDate: '2024-08-12', active: false, status: 'inactive', isArchived: true, albumFolderId: '', photos: [] },
+  { id: 'emp-1', name: 'Noor van Dijk', startDate: '2024-01-15', contractType: 'Permanent', active: true, status: 'active', isArchived: false, albumFolderId: '', photos: [] },
+  { id: 'emp-2', name: 'Samira El Amrani', startDate: '2024-03-04', contractType: 'Fixed-term', active: true, status: 'active', isArchived: false, albumFolderId: '', photos: [] },
+  { id: 'emp-3', name: 'Luca de Vries', startDate: '2024-06-10', contractType: 'On-call', active: true, status: 'active', isArchived: false, albumFolderId: '', photos: [] },
+  { id: 'emp-4', name: 'Ari Hassan', startDate: '2024-08-12', contractType: 'Permanent', active: false, status: 'inactive', isArchived: true, albumFolderId: '', photos: [] },
 ];
 
 const rooms = [
@@ -159,6 +166,7 @@ const normalizeEmployee = (employee) => ({
   id: employee.id || crypto.randomUUID(),
   name: employee.name || 'Unnamed employee',
   startDate: employee.startDate || todayISO(),
+  contractType: employee.contractType || '',
   active: employee.active !== false && employee.status !== 'inactive',
   status: employee.status || (employee.active === false ? 'inactive' : 'active'),
   isArchived: Boolean(employee.isArchived),
@@ -413,7 +421,7 @@ const renderInspections = () => {
   const currentInspector = document.querySelector('#inspector-name')?.value || '';
   const roomOptions = rooms.map((room) => `<option value="${room.number}" ${room.number === currentRoom ? 'selected' : ''}>${room.number}</option>`).join('');
   const assigneeOptions = state.employees.filter((employee) => employee.active).map((employee) => `
-    <option value="${employee.id}" ${currentEmployeeId === employee.id ? 'selected' : ''}>${employee.name}</option>
+    <option value="${escapeHtml(employee.id)}" ${currentEmployeeId === employee.id ? 'selected' : ''}>${escapeHtml(employee.name)}</option>
   `).join('');
 
   return `
@@ -586,13 +594,39 @@ const renderEmployees = () => {
         </div>
       </div>
 
+      <form id="employee-form" class="surface panel employee-form">
+        <h2>Add employee</h2>
+        <div class="field-grid" style="margin-top:14px;">
+          <div class="field">
+            <label for="new-employee-name">Employee name</label>
+            <input id="new-employee-name" name="name" type="text" autocomplete="name" required />
+          </div>
+          <div class="field">
+            <label for="new-employee-start-date">Starting date</label>
+            <input id="new-employee-start-date" name="startDate" type="date" value="${todayISO()}" required />
+          </div>
+          <div class="field">
+            <label for="new-employee-contract-type">Contract type</label>
+            <select id="new-employee-contract-type" name="contractType" required>
+              <option value="">Select contract type</option>
+              <option value="Permanent">Permanent</option>
+              <option value="Fixed-term">Fixed-term</option>
+              <option value="On-call">On-call</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn primary">Add employee</button>
+        </div>
+      </form>
+
       <div class="profile-list">
         ${metrics.map(({ employee, records, avg, failures, album }) => `
           <article class="surface profile-card">
             <div class="employee-row">
               <div>
-                <h3>${employee.name}</h3>
-                <div class="muted">Joined ${formatDate(employee.startDate)} · ${employee.active ? 'Active' : 'Inactive'}</div>
+                <h3>${escapeHtml(employee.name)}</h3>
+                <div class="muted">Started ${formatDate(employee.startDate)} · ${employee.contractType || 'Contract type not set'} · ${employee.active ? 'Active' : 'Inactive'}</div>
               </div>
               <span class="tag">${records.length} inspections</span>
             </div>
@@ -673,7 +707,7 @@ const renderHistory = () => {
               <h3>${formatDate(inspection.date)}</h3>
               <span class="tag">${inspection.percent}%</span>
             </div>
-            <div class="muted">Room status: ${inspection.status || 'Not specified'} · Inspector: ${inspection.inspector} · Housekeeper: ${getEmployee(inspection.employeeId)?.name || 'Unknown'}</div>
+            <div class="muted">Room status: ${inspection.status || 'Not specified'} · Inspector: ${inspection.inspector} · Housekeeper: ${escapeHtml(getEmployee(inspection.employeeId)?.name || 'Unknown')}</div>
             <div class="fine-print" style="margin-top:8px;">Failed items: ${inspection.failed} · Strengths: ${inspection.positive || 'None recorded'}</div>
             ${inspection.results?.length ? `
               <details class="record-details">
@@ -697,7 +731,7 @@ const renderHistory = () => {
 };
 
 const renderReports = () => {
-  const employeeOptions = state.employees.map((employee) => `<option value="${employee.id}">${employee.name}</option>`).join('');
+  const employeeOptions = state.employees.map((employee) => `<option value="${escapeHtml(employee.id)}">${escapeHtml(employee.name)}</option>`).join('');
   const employeeId = document.querySelector('#report-employee')?.value || state.employees[0]?.id;
   const records = state.inspections.filter((inspection) => inspection.employeeId === employeeId);
 
@@ -1116,8 +1150,30 @@ const attachEventHandlers = () => {
     }
   });
 
-  document.addEventListener('submit', (event) => {
+  document.addEventListener('submit', async (event) => {
     const target = event.target;
+    if (target.id === 'employee-form') {
+      event.preventDefault();
+      const formData = new FormData(target);
+      const employee = normalizeEmployee({
+        id: crypto.randomUUID(),
+        name: String(formData.get('name') || '').trim(),
+        startDate: String(formData.get('startDate') || ''),
+        contractType: String(formData.get('contractType') || ''),
+        active: true,
+        status: 'active',
+        isArchived: false,
+        albumFolderId: '',
+        photos: [],
+      });
+
+      state.employees = [...state.employees, employee];
+      saveState();
+      renderNavigation();
+      await syncEmployeeToGoogle(employee);
+      return;
+    }
+
     if (target.id === 'inspection-form') {
       event.preventDefault();
 

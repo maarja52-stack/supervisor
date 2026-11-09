@@ -1,3 +1,5 @@
+const EMPLOYEE_HEADERS = ['id', 'name', 'startDate', 'contractType', 'status', 'isArchived', 'albumFolderId', 'updatedAt'];
+
 function doGet() {
   return ContentService.createTextOutput(JSON.stringify({ ok: true, message: 'Housekeeping API is live.' })).setMimeType(ContentService.MimeType.JSON);
 }
@@ -94,7 +96,7 @@ function ensureEmployeeFolder(employeeId, displayName) {
 }
 
 function listEmployees() {
-  const sheet = ensureSheet('Employees', ['id', 'name', 'startDate', 'status', 'isArchived', 'albumFolderId', 'updatedAt']);
+  const sheet = ensureSheet('Employees', EMPLOYEE_HEADERS);
   const rows = sheet.getDataRange().getValues();
   const headers = rows[0];
   const data = rows.slice(1).map((row) => {
@@ -108,7 +110,7 @@ function listEmployees() {
 }
 
 function saveEmployee(employee) {
-  const sheet = ensureSheet('Employees', ['id', 'name', 'startDate', 'status', 'isArchived', 'albumFolderId', 'updatedAt']);
+  const sheet = ensureSheet('Employees', EMPLOYEE_HEADERS);
   const rows = sheet.getDataRange().getValues();
   const headerRow = rows[0] || [];
   const id = employee.id || Utilities.getUuid();
@@ -116,6 +118,7 @@ function saveEmployee(employee) {
     id,
     name: employee.name || 'Unnamed employee',
     startDate: employee.startDate || new Date().toISOString().slice(0, 10),
+    contractType: employee.contractType || '',
     status: employee.status || 'active',
     isArchived: employee.isArchived ? 'TRUE' : 'FALSE',
     albumFolderId: employee.albumFolderId || '',
@@ -134,14 +137,14 @@ function saveEmployee(employee) {
   }
 
   if (!employeeRow) {
-    sheet.appendRow([payload.id, payload.name, payload.startDate, payload.status, payload.isArchived, payload.albumFolderId, payload.updatedAt]);
+    sheet.appendRow(headerRow.map((header) => payload[header] ?? ''));
     employeeRow = sheet.getLastRow();
   }
 
   if (!payload.albumFolderId) {
     const folder = ensureEmployeeFolder(id, payload.name);
     const folderId = folder.getId();
-    sheet.getRange(employeeRow, 6).setValue(folderId);
+    sheet.getRange(employeeRow, headerRow.indexOf('albumFolderId') + 1).setValue(folderId);
     payload.albumFolderId = folderId;
   }
 
@@ -149,17 +152,23 @@ function saveEmployee(employee) {
 }
 
 function archiveEmployee(employeeId, isArchived) {
-  const sheet = ensureSheet('Employees', ['id', 'name', 'startDate', 'status', 'isArchived', 'albumFolderId', 'updatedAt']);
+  const sheet = ensureSheet('Employees', EMPLOYEE_HEADERS);
   const rows = sheet.getDataRange().getValues();
+  const headers = rows[0] || [];
   const archived = isArchived !== false;
+  const idColumn = headers.indexOf('id');
+  const archivedColumn = headers.indexOf('isArchived');
+  const statusColumn = headers.indexOf('status');
+  const updatedAtColumn = headers.indexOf('updatedAt');
+  const folderIdColumn = headers.indexOf('albumFolderId');
 
   for (let rowIndex = 1; rowIndex < rows.length; rowIndex += 1) {
-    if ((rows[rowIndex][0] || '').toString() === employeeId) {
-      sheet.getRange(rowIndex + 1, 5).setValue(archived ? 'TRUE' : 'FALSE');
-      sheet.getRange(rowIndex + 1, 4).setValue(archived ? 'inactive' : 'active');
-      sheet.getRange(rowIndex + 1, 7).setValue(new Date().toISOString());
+    if ((rows[rowIndex][idColumn] || '').toString() === employeeId) {
+      sheet.getRange(rowIndex + 1, archivedColumn + 1).setValue(archived ? 'TRUE' : 'FALSE');
+      sheet.getRange(rowIndex + 1, statusColumn + 1).setValue(archived ? 'inactive' : 'active');
+      sheet.getRange(rowIndex + 1, updatedAtColumn + 1).setValue(new Date().toISOString());
 
-      const folderId = rows[rowIndex][5];
+      const folderId = rows[rowIndex][folderIdColumn];
       if (folderId) {
         const folder = DriveApp.getFolderById(folderId);
         const destination = archived
@@ -181,13 +190,16 @@ function archiveEmployee(employeeId, isArchived) {
 }
 
 function deleteEmployee(employeeId) {
-  const sheet = ensureSheet('Employees', ['id', 'name', 'startDate', 'status', 'isArchived', 'albumFolderId', 'updatedAt']);
+  const sheet = ensureSheet('Employees', EMPLOYEE_HEADERS);
   const rows = sheet.getDataRange().getValues();
+  const headers = rows[0] || [];
+  const idColumn = headers.indexOf('id');
+  const folderIdColumn = headers.indexOf('albumFolderId');
 
   for (let rowIndex = 1; rowIndex < rows.length; rowIndex += 1) {
-    if ((rows[rowIndex][0] || '').toString() === employeeId) {
+    if ((rows[rowIndex][idColumn] || '').toString() === employeeId) {
       sheet.deleteRow(rowIndex + 1);
-      const folderId = rows[rowIndex][5];
+      const folderId = rows[rowIndex][folderIdColumn];
       if (folderId) {
         try {
           DriveApp.getFolderById(folderId).setTrashed(true);
@@ -268,7 +280,7 @@ function uploadEmployeePhoto(data) {
     return { ok: false, message: 'Missing photo content or employee ID.' };
   }
 
-  const sheet = ensureSheet('Employees', ['id', 'name', 'startDate', 'status', 'isArchived', 'albumFolderId', 'updatedAt']);
+  const sheet = ensureSheet('Employees', EMPLOYEE_HEADERS);
   const rows = sheet.getDataRange().getValues();
   const headers = rows[0] || [];
   const employeeIdColumn = headers.indexOf('id');
