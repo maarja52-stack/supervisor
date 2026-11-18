@@ -720,10 +720,45 @@ textarea {
   gap: 12px;
 }
 
+.report-heading {
+  margin-bottom: 16px;
+}
+
+.report-heading h2 {
+  margin: 0;
+}
+
+.report-heading p {
+  margin: 4px 0 0;
+  color: var(--muted);
+}
+
+.report-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.report-card-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.report-card-heading h3 {
+  margin: 0 0 4px;
+}
+
 .profile-card,
 .history-card,
 .report-card {
   padding: 18px;
+}
+
+.report-card p {
+  margin: 10px 0 0;
 }
 
 .employee-row {
@@ -1074,5 +1109,79 @@ textarea {
   .history-card,
   .report-card {
     border-radius: 12px;
+  }
+}
+
+@media print {
+  @page {
+    margin: 14mm;
+  }
+
+  body,
+  #app,
+  .app-shell,
+  .app-main,
+  .page {
+    display: block;
+    min-height: 0;
+    margin: 0;
+    padding: 0;
+    background: #fff !important;
+    color: #111 !important;
+  }
+
+  .sidebar,
+  .topbar,
+  .report-controls {
+    display: none !important;
+  }
+
+  body * {
+    visibility: hidden !important;
+  }
+
+  .report-print,
+  .report-print * {
+    visibility: visible !important;
+  }
+
+  .report-print {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    color: #111 !important;
+    background: #fff !important;
+    font-size: 10pt;
+  }
+
+  .report-print .surface,
+  .report-print .metric {
+    border: 1px solid #ccc !important;
+    box-shadow: none !important;
+    background: #fff !important;
+    color: #111 !important;
+  }
+
+  .report-print .fine-print,
+  .report-print .report-heading p,
+  .report-print .label {
+    color: #444 !important;
+  }
+
+  .report-print .value,
+  .report-print .tag,
+  .report-print .eyebrow {
+    color: #111 !important;
+  }
+
+  .report-card,
+  .report-summary,
+  .record-result-list {
+    break-inside: avoid;
+  }
+
+  .report-print details,
+  .report-print details:not([open]) > :not(summary) {
+    display: block !important;
   }
 }

@@ -84,6 +84,10 @@ export async function getSnapshotFromGoogle() {
   return callGoogleScript('getSnapshot');
 }
 
+export async function saveAppSettingsToGoogle(settings) {
+  return callGoogleScript('saveAppSettings', settings);
+}
+
 export async function saveEmployeeToGoogle(employee) {
   return callGoogleScript('saveEmployee', employee);
 }
@@ -110,6 +114,7 @@ export function registerGoogleSync() {
     getEmployeesFromGoogle,
     getRecordsFromGoogle,
     getSnapshotFromGoogle,
+    saveAppSettingsToGoogle,
     saveEmployeeToGoogle,
     archiveEmployeeInGoogle,
     deleteEmployeeInGoogle,

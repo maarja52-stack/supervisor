@@ -1,4 +1,4 @@
-import { registerGoogleSync, getSnapshotFromGoogle, saveEmployeeToGoogle, saveInspectionToGoogle, archiveEmployeeInGoogle, deleteEmployeeInGoogle, uploadEmployeePhoto } from './googleIntegration.js';
+import { registerGoogleSync, getSnapshotFromGoogle, saveAppSettingsToGoogle, saveEmployeeToGoogle, saveInspectionToGoogle, archiveEmployeeInGoogle, deleteEmployeeInGoogle, uploadEmployeePhoto } from './googleIntegration.js';
 import { googleScriptConfig } from './config.js';
 
 const app = document.getElementById('app');
@@ -13,9 +13,16 @@ const escapeHtml = (value) => String(value ?? '').replace(/[&<>"']/g, (character
 }[character]));
 
 const todayISO = () => new Date().toISOString().slice(0, 10);
+const sixMonthsAgoISO = () => {
+  const date = new Date();
+  date.setMonth(date.getMonth() - 6);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+};
 const formatDate = (dateString) => {
   if (!dateString) return '—';
-  const date = new Date(dateString + 'T12:00:00');
+  const dateValue = String(dateString).slice(0, 10);
+  const date = new Date(`${dateValue}T12:00:00`);
+  if (!Number.isFinite(date.getTime())) return '—';
   return new Intl.DateTimeFormat('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }).format(date);
 };
 
@@ -102,12 +109,13 @@ const rooms = [
   ...Array.from({ length: 13 }, (_, i) => ({ number: String(301 + i), floor: 3, category: i % 5 === 0 ? 'Premium' : 'Standard' })),
 ];
 
-const supervisors = ['Ava Jansen', 'Milan de Boer', 'Sophie Vermeer'];
+const defaultSupervisors = ['Ava Jansen', 'Milan de Boer', 'Sophie Vermeer'];
 
 const defaultState = {
   currentView: 'dashboard',
   workingDate: todayISO(),
   employees: defaultEmployees,
+  supervisors: defaultSupervisors,
   inspections: [],
   version: 'HVN-100-v1',
   sections: JSON.parse(JSON.stringify(baseSections)),
@@ -126,6 +134,7 @@ const loadState = () => {
       ...parsed,
       currentView: parsed.currentView === 'rooms' ? 'dashboard' : parsed.currentView,
       employees: Array.isArray(parsed.employees) ? parsed.employees : defaultEmployees,
+      supervisors: Array.isArray(parsed.supervisors) ? parsed.supervisors : defaultSupervisors,
       sections: parsed.sections?.length ? parsed.sections : JSON.parse(JSON.stringify(baseSections)),
       draftSections: parsed.draftSections?.length ? parsed.draftSections : JSON.parse(JSON.stringify(baseSections)),
     };
@@ -136,6 +145,7 @@ const loadState = () => {
 
 let state = loadState();
 const viewHistory = [];
+let generatedReport = null;
 
 const saveState = () => {
   try {
@@ -195,6 +205,9 @@ const syncSharedDataFromGoogle = async () => {
   try {
     const snapshot = await getSnapshotFromGoogle();
     if (!snapshot?.ok) throw new Error(snapshot?.message || 'Could not load shared Google data.');
+    if (Array.isArray(snapshot.settings?.supervisors)) {
+      state.supervisors = snapshot.settings.supervisors;
+    }
 
     const existingEmployees = new Map(state.employees.map((employee) => [employee.id, employee]));
     const photosById = new Map((snapshot.photos || []).map((photo) => [photo.photoId, {
@@ -237,6 +250,8 @@ const syncSharedDataFromGoogle = async () => {
       const corrections = parseJsonField(record.corrections, []);
       return {
         ...record,
+        date: record.date ? String(record.date).slice(0, 10) : '',
+        room: String(record.room ?? ''),
         percent: Number(record.percent) || 0,
         failed: Number(record.failed) || 0,
         scored: Number(record.scored) || 0,
@@ -563,7 +578,7 @@ const renderInspections = () => {
               <label for="inspector-name">Inspector name</label>
               <select id="inspector-name" required>
                 <option value="">Select supervisor</option>
-                ${supervisors.map((name) => `<option value="${name}">${name}</option>`).join('')}
+                ${state.supervisors.map((name) => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('')}
               </select>
             </div>
           </div>
@@ -814,9 +829,20 @@ const renderHistory = () => {
 };
 
 const renderReports = () => {
-  const employeeOptions = state.employees.map((employee) => `<option value="${escapeHtml(employee.id)}">${escapeHtml(employee.name)}</option>`).join('');
-  const employeeId = document.querySelector('#report-employee')?.value || state.employees[0]?.id;
-  const records = state.inspections.filter((inspection) => inspection.employeeId === employeeId);
+  const selectedEmployeeId = document.querySelector('#report-employee')?.value || state.employees[0]?.id || '';
+  const selectedStartDate = document.querySelector('#report-start')?.value || sixMonthsAgoISO();
+  const selectedEndDate = document.querySelector('#report-end')?.value || todayISO();
+  const employeeOptions = state.employees.map((employee) => `<option value="${escapeHtml(employee.id)}" ${employee.id === selectedEmployeeId ? 'selected' : ''}>${escapeHtml(employee.name)}${employee.active ? '' : ' (Archived)'}</option>`).join('');
+  const reportIsCurrent = generatedReport
+    && generatedReport.employeeId === selectedEmployeeId
+    && generatedReport.startDate === selectedStartDate
+    && generatedReport.endDate === selectedEndDate;
+  const employee = reportIsCurrent ? state.employees.find((current) => current.id === generatedReport.employeeId) : null;
+  const records = reportIsCurrent ? generatedReport.records : [];
+  const average = records.length
+    ? Math.round(records.reduce((sum, inspection) => sum + (Number(inspection.percent) || 0), 0) / records.length)
+    : 0;
+  const failedItems = records.reduce((sum, inspection) => sum + (Number(inspection.failed) || 0), 0);
 
   return `
     <section class="section active">
@@ -827,37 +853,78 @@ const renderReports = () => {
         </div>
       </div>
 
-      <div class="surface panel" style="margin-bottom:18px;">
+      <div class="surface panel report-controls" style="margin-bottom:18px;">
         <div class="field-grid">
           <div class="field">
             <label for="report-employee">Employee</label>
-            <select id="report-employee">${employeeOptions}</select>
+            <select id="report-employee" required>
+              ${employeeOptions || '<option value="">No employees available</option>'}
+            </select>
           </div>
           <div class="field">
             <label for="report-start">From</label>
-            <input id="report-start" type="date" value="${state.workingDate}" />
+            <input id="report-start" type="date" value="${escapeHtml(selectedStartDate)}" required />
           </div>
           <div class="field">
             <label for="report-end">To</label>
-            <input id="report-end" type="date" value="${state.workingDate}" />
+            <input id="report-end" type="date" value="${escapeHtml(selectedEndDate)}" required />
           </div>
         </div>
         <div class="form-actions">
           <button type="button" class="btn primary" id="generate-report">Generate report</button>
-          <button type="button" class="btn secondary" id="export-report">Export PDF / Print</button>
+          <button type="button" class="btn secondary" id="export-report" ${reportIsCurrent ? '' : 'disabled'}>Print / Save as PDF</button>
         </div>
+        <p class="fine-print">Choose any date range, including the last six months. In the print dialog, select “Save as PDF” to download a PDF.</p>
       </div>
 
-      <div class="report-list">
-        ${records.length ? records.map((inspection) => `
-          <article class="surface report-card">
-            <div style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:center;">
-              <h3>Room ${inspection.room}</h3>
-              <span class="tag">${inspection.percent}%</span>
-            </div>
-            <div class="fine-print" style="margin-top:8px;">${formatDate(inspection.date)} · ${inspection.status || 'Status not specified'} · Inspector: ${inspection.inspector}</div>
-          </article>
-        `).join('') : '<div class="surface panel">No inspection data for this employee in the selected range.</div>'}
+      <div class="report-print">
+        ${reportIsCurrent ? `
+          <header class="report-heading">
+            <p class="eyebrow">Employee performance report</p>
+            <h2>${escapeHtml(employee?.name || 'Employee')}</h2>
+            <p>${formatDate(generatedReport.startDate)} – ${formatDate(generatedReport.endDate)}</p>
+          </header>
+          <div class="report-summary">
+            <article class="surface metric"><div class="label">Inspections</div><div class="value">${records.length}</div></article>
+            <article class="surface metric"><div class="label">Average score</div><div class="value">${records.length ? `${average}%` : '—'}</div></article>
+            <article class="surface metric"><div class="label">Failed items</div><div class="value">${failedItems}</div></article>
+          </div>
+          <div class="report-list">
+            ${records.length ? records.map((inspection) => {
+              const results = Array.isArray(inspection.results) ? inspection.results : [];
+              const corrections = Array.isArray(inspection.corrections) ? inspection.corrections : [];
+              return `
+                <article class="surface report-card">
+                  <div class="report-card-heading">
+                    <div>
+                      <h3>Room ${escapeHtml(inspection.room)}</h3>
+                      <div class="fine-print">${formatDate(inspection.date)} · ${escapeHtml(inspection.status || 'Status not specified')}</div>
+                    </div>
+                    <span class="tag">${Number(inspection.percent) || 0}%</span>
+                  </div>
+                  <p class="fine-print">Inspector: ${escapeHtml(inspection.inspector || 'Not specified')} · ${Number(inspection.failed) || 0} failed items · Score: ${Number(inspection.scored) || 0} / ${Number(inspection.possible) || 0}</p>
+                  ${inspection.positive ? `<p><strong>Positive feedback:</strong> ${escapeHtml(inspection.positive)}</p>` : ''}
+                  ${inspection.development ? `<p><strong>Development:</strong> ${escapeHtml(inspection.development)}</p>` : ''}
+                  ${results.length ? `
+                    <details class="record-details">
+                      <summary>Checklist results</summary>
+                      <div class="record-result-list">
+                        ${results.map((result) => `
+                          <div class="record-result ${escapeHtml(result.value)}">
+                            <strong>${escapeHtml(result.label)}</strong>
+                            <span>${escapeHtml(result.category || '')} · ${escapeHtml(String(result.value || '').toUpperCase())} · ${Number(result.points) || 0} pts</span>
+                            ${result.correction?.description ? `<small>${escapeHtml(result.correction.description)}${result.correction.responsibility ? ` · ${escapeHtml(result.correction.responsibility)}` : ''}</small>` : ''}
+                          </div>
+                        `).join('')}
+                      </div>
+                    </details>
+                  ` : ''}
+                  ${corrections.length ? `<p class="fine-print">Corrections recorded: ${corrections.length}</p>` : ''}
+                </article>
+              `;
+            }).join('') : '<div class="surface panel">No inspection data for this employee in the selected date range.</div>'}
+          </div>
+        ` : '<div class="surface panel report-empty">Choose an employee and date range, then select “Generate report”.</div>'}
       </div>
     </section>
   `;
@@ -872,6 +939,21 @@ const renderSettings = () => {
           <p class="eyebrow">Workspace configuration</p>
           <h1>Settings</h1>
         </div>
+      </div>
+
+      <div class="surface panel" style="margin-bottom:18px;">
+        <h2>Supervisors</h2>
+        <p class="fine-print" style="margin:8px 0 12px;">Edit the names available in the inspection supervisor list. Enter one name per line.</p>
+        <form id="supervisors-form">
+          <div class="field">
+            <label for="supervisors-list">Supervisor names</label>
+            <textarea id="supervisors-list" rows="5" required>${escapeHtml(state.supervisors.join('\n'))}</textarea>
+          </div>
+          <div id="supervisors-error" class="fine-print" role="alert" aria-live="polite"></div>
+          <div class="form-actions">
+            <button type="submit" class="btn primary">Save supervisors</button>
+          </div>
+        </form>
       </div>
 
       <div class="surface panel" style="margin-bottom:18px;">
@@ -1159,19 +1241,20 @@ const attachEventHandlers = () => {
       const employeeId = document.getElementById('report-employee')?.value;
       const start = document.getElementById('report-start')?.value;
       const end = document.getElementById('report-end')?.value;
-      const filtered = state.inspections.filter((inspection) => inspection.employeeId === employeeId && inspection.date >= start && inspection.date <= end);
-      const reportList = document.querySelector('.report-list');
-      if (reportList) {
-        reportList.innerHTML = filtered.length ? filtered.map((inspection) => `
-          <article class="surface report-card">
-            <div style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; align-items:center;">
-              <h3>Room ${inspection.room}</h3>
-              <span class="tag">${inspection.percent}%</span>
-            </div>
-            <div class="fine-print" style="margin-top:8px;">${formatDate(inspection.date)} · ${inspection.status} · ${inspection.inspector}</div>
-          </article>
-        `).join('') : '<div class="surface panel">No inspection data for this employee in the selected range.</div>';
+      if (!employeeId || !start || !end || start > end) {
+        window.alert('Choose an employee and a valid date range (From must be on or before To).');
+        return;
       }
+
+      generatedReport = {
+        employeeId,
+        startDate: start,
+        endDate: end,
+        records: state.inspections
+          .filter((inspection) => inspection.employeeId === employeeId && inspection.date >= start && inspection.date <= end)
+          .sort((left, right) => String(right.date).localeCompare(String(left.date))),
+      };
+      renderNavigation();
     }
 
     if (target.classList.contains('archive-employee')) {
@@ -1183,7 +1266,7 @@ const attachEventHandlers = () => {
         ...employee,
         active: !employee.active,
         status: employee.active ? 'inactive' : 'active',
-        isArchived: !employee.active,
+        isArchived: employee.active,
       };
 
       state.employees = state.employees.map((current) => current.id === employeeId ? normalizeEmployee(nextState) : current);
@@ -1235,6 +1318,37 @@ const attachEventHandlers = () => {
 
   document.addEventListener('submit', async (event) => {
     const target = event.target;
+    if (target.id === 'supervisors-form') {
+      event.preventDefault();
+      const names = [...new Set(
+        document.getElementById('supervisors-list').value
+          .split(/\r?\n/)
+          .map((name) => name.trim())
+          .filter(Boolean)
+      )];
+      const error = document.getElementById('supervisors-error');
+      if (!names.length) {
+        error.textContent = 'Enter at least one supervisor name.';
+        return;
+      }
+
+      try {
+        if (googleScriptConfig.enabled) {
+          const result = await saveAppSettingsToGoogle({ supervisors: names });
+          if (!result?.ok) throw new Error(result?.message || 'Supervisor settings sync failed.');
+          state.supervisors = result.settings?.supervisors || names;
+        } else {
+          state.supervisors = names;
+        }
+        saveState();
+        renderNavigation();
+      } catch (syncError) {
+        error.textContent = syncError.message || 'Could not save supervisor names.';
+        reportGoogleSyncError('Supervisor sync failed', syncError);
+      }
+      return;
+    }
+
     if (target.id === 'employee-form') {
       event.preventDefault();
       const formData = new FormData(target);

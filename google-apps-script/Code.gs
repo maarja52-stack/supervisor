@@ -1,4 +1,5 @@
 const EMPLOYEE_HEADERS = ['id', 'name', 'startDate', 'contractType', 'status', 'isArchived', 'albumFolderId', 'updatedAt'];
+const DEFAULT_SUPERVISORS = ['Ava Jansen', 'Milan de Boer', 'Sophie Vermeer'];
 
 function doGet() {
   const sheets = getEmployeeSheets_();
@@ -39,6 +40,9 @@ function doPost(e) {
         break;
       case 'getSnapshot':
         result = getSnapshot();
+        break;
+      case 'saveAppSettings':
+        result = saveAppSettings(data);
         break;
       case 'saveEmployee':
         result = saveEmployee(data);
@@ -142,10 +146,14 @@ function sheetRecords_(sheet, keyColumn) {
   const rows = sheet.getDataRange().getValues();
   const headers = rows[0] || [];
   const recordKey = keyColumn || 'id';
+  const timeZone = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone();
   return rows.slice(1).map((row) => {
     const record = {};
     headers.forEach((header, index) => {
-      record[header] = row[index] ?? '';
+      const value = row[index];
+      record[header] = value instanceof Date && (header === 'date' || header === 'startDate')
+        ? Utilities.formatDate(value, timeZone, 'yyyy-MM-dd')
+        : value ?? '';
     });
     return record;
   }).filter((record) => record[recordKey]);
@@ -304,24 +312,67 @@ function deleteEmployee(employeeId) {
 
 function listRecords() {
   const sheet = ensureSheet('Room_Records', ['id', 'date', 'room', 'status', 'employeeId', 'inspector', 'percent', 'failed', 'positive', 'development', 'scored', 'possible', 'version', 'results', 'corrections', 'createdAt']);
-  const rows = sheet.getDataRange().getValues();
-  const headers = rows[0];
-  const data = rows.slice(1).map((row) => {
-    const record = {};
-    headers.forEach((header, index) => {
-      record[header] = row[index] ?? '';
-    });
-    return record;
-  }).filter((row) => row.id);
-
-  return { ok: true, records: data };
+  return { ok: true, records: sheetRecords_(sheet) };
 }
 
 function getSnapshot() {
   const employees = listEmployees().employees;
   const records = listRecords().records;
   const photos = listPhotos().photos;
-  return { ok: true, employees, records, photos };
+  const settings = getAppSettings();
+  return { ok: true, employees, records, photos, settings };
+}
+
+function getAppSettings() {
+  const sheet = ensureSheet('App_Settings', ['key', 'value', 'updatedAt']);
+  const rows = sheet.getDataRange().getValues();
+  const keyColumn = rows[0].indexOf('key');
+  const valueColumn = rows[0].indexOf('value');
+  const rowIndex = rows.findIndex((row, index) => index > 0 && row[keyColumn] === 'supervisors');
+
+  if (rowIndex < 0) {
+    const supervisors = DEFAULT_SUPERVISORS.slice();
+    sheet.appendRow(['supervisors', JSON.stringify(supervisors), new Date().toISOString()]);
+    return { supervisors };
+  }
+
+  let supervisors;
+  try {
+    supervisors = JSON.parse(rows[rowIndex][valueColumn]);
+  } catch (error) {
+    throw new Error('Supervisor settings in App_Settings are invalid JSON.');
+  }
+  if (!Array.isArray(supervisors) || supervisors.some((name) => typeof name !== 'string')) {
+    throw new Error('Supervisor settings in App_Settings must be a list of names.');
+  }
+  return { supervisors };
+}
+
+function saveAppSettings(settings) {
+  const names = settings && Array.isArray(settings.supervisors)
+    ? [...new Set(settings.supervisors.map((name) => String(name || '').trim()).filter(Boolean))]
+    : [];
+  if (!names.length) {
+    return { ok: false, message: 'Enter at least one supervisor name.' };
+  }
+
+  const sheet = ensureSheet('App_Settings', ['key', 'value', 'updatedAt']);
+  const rows = sheet.getDataRange().getValues();
+  const headers = rows[0] || [];
+  const keyColumn = headers.indexOf('key');
+  const settingRecord = {
+    key: 'supervisors',
+    value: JSON.stringify(names),
+    updatedAt: new Date().toISOString(),
+  };
+  const rowValues = headers.map((header) => settingRecord[header] ?? '');
+  const rowIndex = rows.findIndex((row, index) => index > 0 && row[keyColumn] === 'supervisors');
+  if (rowIndex < 0) {
+    sheet.appendRow(rowValues);
+  } else {
+    sheet.getRange(rowIndex + 1, 1, 1, rowValues.length).setValues([rowValues]);
+  }
+  return { ok: true, settings: { supervisors: names } };
 }
 
 function listPhotos() {
