@@ -311,7 +311,7 @@ function deleteEmployee(employeeId) {
 }
 
 function listRecords() {
-  const sheet = ensureSheet('Room_Records', ['id', 'date', 'room', 'status', 'employeeId', 'inspector', 'percent', 'failed', 'positive', 'development', 'scored', 'possible', 'version', 'results', 'corrections', 'createdAt']);
+  const sheet = ensureSheet('Room_Records', ['id', 'date', 'room', 'status', 'employeeId', 'inspector', 'percent', 'failed', 'positive', 'development', 'scored', 'possible', 'version', 'results', 'corrections', 'createdAt', 'roomCategory', 'standardTimeMinutes', 'timeSpentMinutes']);
   return { ok: true, records: sheetRecords_(sheet) };
 }
 
@@ -407,7 +407,7 @@ function listPhotos() {
 }
 
 function saveInspection(inspection) {
-  const sheet = ensureSheet('Room_Records', ['id', 'date', 'room', 'status', 'employeeId', 'inspector', 'percent', 'failed', 'positive', 'development', 'scored', 'possible', 'version', 'results', 'corrections', 'createdAt']);
+  const sheet = ensureSheet('Room_Records', ['id', 'date', 'room', 'status', 'employeeId', 'inspector', 'percent', 'failed', 'positive', 'development', 'scored', 'possible', 'version', 'results', 'corrections', 'createdAt', 'roomCategory', 'standardTimeMinutes', 'timeSpentMinutes']);
   const id = inspection.id || Utilities.getUuid();
   const record = {
     id,
@@ -426,6 +426,9 @@ function saveInspection(inspection) {
     results: JSON.stringify(inspection.results || []),
     corrections: JSON.stringify(inspection.corrections || []),
     createdAt: new Date().toISOString(),
+    roomCategory: inspection.roomCategory || '',
+    standardTimeMinutes: inspection.standardTimeMinutes || '',
+    timeSpentMinutes: inspection.timeSpentMinutes ?? '',
   };
   const headers = sheet.getDataRange().getValues()[0] || [];
   const row = headers.map((header) => record[header] ?? '');

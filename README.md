@@ -18,6 +18,8 @@ Supervisor names can be edited in the app's Settings page. The shared roster is 
 
 The Reports page lets you choose any employee (including archived employees) and date range, defaults to the previous six months, and summarizes matching inspections. Use **Print / Save as PDF**, then choose **Save as PDF** in the browser's print dialog to save or print the report.
 
+The inspection form shows each room's category and standard cleaning time: Comfort 30 minutes, Superior 40 minutes, and Suite 50 minutes. Enter the actual minutes spent to see whether the room was over or under its standard. The room category, standard, and entered time are saved with the inspection, synced through Google, and shown in inspection history and employee reports. Reports total the recorded minutes over and under standard; inspections without a time entry are excluded from those totals.
+
 The frontend submits through a hidden form/iframe so it can receive Apps Script responses without browser CORS blocking. Whenever `Code.gs` changes, update the existing Apps Script deployment to a new version.
 
 ## Local development

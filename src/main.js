@@ -104,10 +104,37 @@ const defaultEmployees = [
 ];
 
 const rooms = [
-  ...Array.from({ length: 15 }, (_, i) => ({ number: String(101 + i), floor: 1, category: i % 4 === 0 ? 'Premium' : 'Standard' })),
-  ...Array.from({ length: 15 }, (_, i) => ({ number: String(201 + i), floor: 2, category: i % 3 === 0 ? 'Suite' : 'Standard' })),
-  ...Array.from({ length: 13 }, (_, i) => ({ number: String(301 + i), floor: 3, category: i % 5 === 0 ? 'Premium' : 'Standard' })),
+  ...['Superior', 'Superior', 'Superior', 'Comfort', 'Comfort', 'Superior', 'Comfort', 'Superior', 'Comfort', 'Comfort', 'Comfort', 'Superior', 'Superior', 'Suite', 'Superior']
+    .map((category, index) => ({ number: String(101 + index), floor: 1, category })),
+  ...['Superior', 'Suite', 'Superior', 'Superior', 'Comfort', 'Superior', 'Comfort', 'Superior', 'Comfort', 'Comfort', 'Comfort', 'Superior', 'Comfort', 'Comfort', 'Comfort']
+    .map((category, index) => ({ number: String(201 + index), floor: 2, category })),
+  ...['Superior', 'Suite', 'Suite', 'Comfort', 'Superior', 'Superior', 'Superior', 'Comfort', 'Superior', 'Comfort', 'Comfort', 'Comfort', 'Superior']
+    .map((category, index) => ({ number: String(301 + index), floor: 3, category })),
 ];
+
+const standardRoomTimes = { Comfort: 30, Superior: 40, Suite: 50 };
+const getRoomTimeStandard = (roomNumber) => {
+  const room = rooms.find((currentRoom) => currentRoom.number === String(roomNumber));
+  return room ? { category: room.category, minutes: standardRoomTimes[room.category] } : null;
+};
+const formatTimeVariance = (actualMinutes, standardMinutes) => {
+  const variance = actualMinutes - standardMinutes;
+  if (variance === 0) return 'On standard';
+  return variance > 0 ? `${variance} min over standard` : `${Math.abs(variance)} min under standard`;
+};
+const getInspectionTiming = (inspection) => {
+  if (inspection.timeSpentMinutes === '' || inspection.timeSpentMinutes === null || inspection.timeSpentMinutes === undefined) return null;
+  const actualMinutes = Number(inspection.timeSpentMinutes);
+  const roomStandard = getRoomTimeStandard(inspection.room);
+  const standardMinutes = Number(inspection.standardTimeMinutes) || roomStandard?.minutes;
+  if (!Number.isFinite(actualMinutes) || !standardMinutes) return null;
+  return {
+    actualMinutes,
+    standardMinutes,
+    category: inspection.roomCategory || roomStandard?.category || 'Room',
+    varianceMinutes: actualMinutes - standardMinutes,
+  };
+};
 
 const defaultSupervisors = ['Ava Jansen', 'Milan de Boer', 'Sophie Vermeer'];
 
@@ -513,10 +540,12 @@ const renderDashboard = () => {
 
 const renderInspections = () => {
   const currentRoom = document.querySelector('#inspection-room')?.value || rooms[0].number;
+  const currentTimeSpent = document.querySelector('#inspection-time-spent')?.value || '';
   const currentDate = document.querySelector('#inspection-date')?.value || state.workingDate;
   const currentStatus = document.querySelector('#inspection-status')?.value || '';
   const currentEmployeeId = document.querySelector('#inspection-assignee')?.value || '';
   const currentInspector = document.querySelector('#inspector-name')?.value || '';
+  const roomTimeStandard = getRoomTimeStandard(currentRoom);
   const roomOptions = rooms.map((room) => `<option value="${room.number}" ${room.number === currentRoom ? 'selected' : ''}>${room.number}</option>`).join('');
   const assigneeOptions = state.employees.filter((employee) => employee.active).map((employee) => `
     <option value="${escapeHtml(employee.id)}" ${currentEmployeeId === employee.id ? 'selected' : ''}>${escapeHtml(employee.name)}</option>
@@ -553,6 +582,17 @@ const renderInspections = () => {
             <div class="field">
               <label for="inspection-room">Room</label>
               <select id="inspection-room">${roomOptions}</select>
+            </div>
+            <div class="field">
+              <label>Room category and standard</label>
+              <div id="room-time-standard" class="room-time-standard" aria-live="polite">
+                ${roomTimeStandard ? `${roomTimeStandard.category} · ${roomTimeStandard.minutes} min standard` : 'No standard time set'}
+              </div>
+            </div>
+            <div class="field">
+              <label for="inspection-time-spent">Time spent in room (minutes)</label>
+              <input id="inspection-time-spent" type="number" min="0" step="1" inputmode="numeric" value="${escapeHtml(currentTimeSpent)}" placeholder="Enter actual minutes" />
+              <small id="room-time-variance" class="fine-print" aria-live="polite">Enter time spent to compare with the room standard.</small>
             </div>
             <div class="field">
               <label for="inspection-date">Inspection date</label>
@@ -799,7 +839,9 @@ const renderHistory = () => {
       </div>
 
       <div class="history-list">
-        ${roomInspections.length ? roomInspections.map((inspection) => `
+        ${roomInspections.length ? roomInspections.map((inspection) => {
+          const timing = getInspectionTiming(inspection);
+          return `
           <article class="surface history-card">
             <div style="display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; align-items: center; margin-bottom:10px;">
               <h3>${formatDate(inspection.date)}</h3>
@@ -807,6 +849,7 @@ const renderHistory = () => {
             </div>
             <div class="muted">Room status: ${inspection.status || 'Not specified'} · Inspector: ${inspection.inspector} · Housekeeper: ${escapeHtml(getEmployee(inspection.employeeId)?.name || 'Unknown')}</div>
             <div class="fine-print" style="margin-top:8px;">Failed items: ${inspection.failed} · Strengths: ${inspection.positive || 'None recorded'}</div>
+            <div class="fine-print room-time-record">${timing ? `Time: ${timing.actualMinutes} min actual / ${timing.standardMinutes} min standard (${escapeHtml(timing.category)}) · ${formatTimeVariance(timing.actualMinutes, timing.standardMinutes)}` : 'Time not recorded'}</div>
             ${inspection.results?.length ? `
               <details class="record-details">
                 <summary>Checklist results · ${inspection.version || 'Standard'}</summary>
@@ -822,7 +865,8 @@ const renderHistory = () => {
               </details>
             ` : ''}
           </article>
-        `).join('') : '<div class="surface panel">No inspection history for this room yet.</div>'}
+        `;
+        }).join('') : '<div class="surface panel">No inspection history for this room yet.</div>'}
       </div>
     </section>
   `;
@@ -843,6 +887,9 @@ const renderReports = () => {
     ? Math.round(records.reduce((sum, inspection) => sum + (Number(inspection.percent) || 0), 0) / records.length)
     : 0;
   const failedItems = records.reduce((sum, inspection) => sum + (Number(inspection.failed) || 0), 0);
+  const timedRecords = records.map(getInspectionTiming).filter(Boolean);
+  const timeOverStandard = timedRecords.reduce((sum, timing) => sum + Math.max(0, timing.varianceMinutes), 0);
+  const timeUnderStandard = timedRecords.reduce((sum, timing) => sum + Math.max(0, -timing.varianceMinutes), 0);
 
   return `
     <section class="section active">
@@ -888,11 +935,14 @@ const renderReports = () => {
             <article class="surface metric"><div class="label">Inspections</div><div class="value">${records.length}</div></article>
             <article class="surface metric"><div class="label">Average score</div><div class="value">${records.length ? `${average}%` : '—'}</div></article>
             <article class="surface metric"><div class="label">Failed items</div><div class="value">${failedItems}</div></article>
+            <article class="surface metric"><div class="label">Time over standard</div><div class="value">${timeOverStandard} min</div></article>
+            <article class="surface metric"><div class="label">Time under standard</div><div class="value">${timeUnderStandard} min</div></article>
           </div>
           <div class="report-list">
             ${records.length ? records.map((inspection) => {
               const results = Array.isArray(inspection.results) ? inspection.results : [];
               const corrections = Array.isArray(inspection.corrections) ? inspection.corrections : [];
+              const timing = getInspectionTiming(inspection);
               return `
                 <article class="surface report-card">
                   <div class="report-card-heading">
@@ -903,6 +953,7 @@ const renderReports = () => {
                     <span class="tag">${Number(inspection.percent) || 0}%</span>
                   </div>
                   <p class="fine-print">Inspector: ${escapeHtml(inspection.inspector || 'Not specified')} · ${Number(inspection.failed) || 0} failed items · Score: ${Number(inspection.scored) || 0} / ${Number(inspection.possible) || 0}</p>
+                  <p class="fine-print room-time-record">${timing ? `Time: ${timing.actualMinutes} min actual / ${timing.standardMinutes} min standard (${escapeHtml(timing.category)}) · ${formatTimeVariance(timing.actualMinutes, timing.standardMinutes)}` : 'Time not recorded'}</p>
                   ${inspection.positive ? `<p><strong>Positive feedback:</strong> ${escapeHtml(inspection.positive)}</p>` : ''}
                   ${inspection.development ? `<p><strong>Development:</strong> ${escapeHtml(inspection.development)}</p>` : ''}
                   ${results.length ? `
@@ -973,6 +1024,18 @@ const renderSettings = () => {
         <div class="fine-print" style="margin-top:12px;">Total master score: ${totalMasterPoints} points</div>
       </div>
 
+      <div class="surface panel" style="margin-bottom:18px;">
+        <h2>Room time standards</h2>
+        <p class="fine-print" style="margin:8px 0 12px;">Time comparisons use these standard minutes for each room category.</p>
+        <div class="metric-row">
+          ${['Comfort', 'Superior', 'Suite'].map((category) => {
+            const count = rooms.filter((room) => room.category === category).length;
+            const minutes = standardRoomTimes[category];
+            return `<div class="surface metric"><div class="label">${category} · ${count} rooms</div><div class="value">${minutes} min</div></div>`;
+          }).join('')}
+        </div>
+      </div>
+
       <div class="surface panel">
         <h2>Draft a future version</h2>
         <div style="margin-top:14px; display:grid; gap:12px;">
@@ -1008,6 +1071,10 @@ const attachEventHandlers = () => {
 
   document.addEventListener('change', async (event) => {
     const target = event.target;
+
+    if (target.id === 'inspection-room') {
+      updateRoomTimePreview();
+    }
 
     if (target.id === 'history-room') {
       renderNavigation();
@@ -1375,6 +1442,12 @@ const attachEventHandlers = () => {
       event.preventDefault();
 
       const room = document.getElementById('inspection-room')?.value;
+      const roomTimeStandard = getRoomTimeStandard(room);
+      const timeSpentValue = document.getElementById('inspection-time-spent')?.value ?? '';
+      if (timeSpentValue !== '' && (!Number.isInteger(Number(timeSpentValue)) || Number(timeSpentValue) < 0)) {
+        window.alert('Enter time spent as a whole number of minutes (0 or more).');
+        return;
+      }
       const date = document.getElementById('inspection-date')?.value || state.workingDate;
       const status = document.getElementById('inspection-status')?.value;
       const employeeId = document.getElementById('inspection-assignee')?.value;
@@ -1413,6 +1486,9 @@ const attachEventHandlers = () => {
         id: crypto.randomUUID(),
         date,
         room,
+        roomCategory: roomTimeStandard?.category || '',
+        standardTimeMinutes: roomTimeStandard?.minutes || '',
+        timeSpentMinutes: timeSpentValue === '' ? '' : Number(timeSpentValue),
         status,
         employeeId,
         inspector,
@@ -1441,6 +1517,9 @@ const attachEventHandlers = () => {
 
   document.addEventListener('input', (event) => {
     const target = event.target;
+    if (target.id === 'inspection-time-spent') {
+      updateRoomTimePreview();
+    }
     if (target.matches('[data-draft-label]') || target.matches('[data-draft-points]')) {
       const [sectionIndex, itemIndex] = target.dataset.draftLabel ? target.dataset.draftLabel.split('-') : target.dataset.draftPoints.split('-');
       const section = state.draftSections[Number(sectionIndex)];
@@ -1452,6 +1531,35 @@ const attachEventHandlers = () => {
   });
 
   updateInspectionScore();
+  updateRoomTimePreview();
+};
+
+const updateRoomTimePreview = () => {
+  const roomNumber = document.getElementById('inspection-room')?.value;
+  const actualInput = document.getElementById('inspection-time-spent');
+  const standardElement = document.getElementById('room-time-standard');
+  const varianceElement = document.getElementById('room-time-variance');
+  if (!actualInput || !standardElement || !varianceElement) return;
+
+  const standard = getRoomTimeStandard(roomNumber);
+  if (!standard) {
+    standardElement.textContent = 'No standard time set';
+    varianceElement.textContent = 'Enter time spent to compare with the room standard.';
+    return;
+  }
+  standardElement.textContent = `${standard.category} · ${standard.minutes} min standard`;
+
+  if (actualInput.value === '') {
+    varianceElement.textContent = 'Enter time spent to compare with the room standard.';
+    return;
+  }
+
+  const actualMinutes = Number(actualInput.value);
+  if (!Number.isInteger(actualMinutes) || actualMinutes < 0) {
+    varianceElement.textContent = 'Enter a whole number of minutes (0 or more).';
+    return;
+  }
+  varianceElement.textContent = `${actualMinutes} min actual · ${formatTimeVariance(actualMinutes, standard.minutes)}`;
 };
 
 const updateInspectionScore = () => {

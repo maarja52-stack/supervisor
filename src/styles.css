@@ -735,9 +735,20 @@ textarea {
 
 .report-summary {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(125px, 1fr));
   gap: 10px;
   margin-bottom: 16px;
+}
+
+.room-time-standard {
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  color: var(--ink);
+}
+
+.room-time-record {
+  color: var(--muted);
 }
 
 .report-card-heading {
